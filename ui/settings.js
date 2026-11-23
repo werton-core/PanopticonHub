@@ -21,10 +21,80 @@
   };
   var viewportSelector = '.modal.m-settings > .modal-body';
   var viewports = new WeakMap();
-  var regionControls = new WeakMap();
+  var pendingRegionWrite;
   var reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
   var dragProperties = ['app-region', '-webkit-app-region'];
   var oldDrag;
+  var identitySettings = new WeakMap();
+
+  function configureIdentity(viewport) {
+    if (identitySettings.has(viewport)) return;
+    var section = document.createElement('section');
+    section.className = 'st-block';
+    var header = document.createElement('h3');
+    header.className = 'st-block__head';
+    header.textContent = 'Подключение';
+    var body = document.createElement('div');
+    body.className = 'st-block__body';
+    var row = document.createElement('div');
+    row.className = 'st-set-row';
+    var labels = document.createElement('div');
+    var name = document.createElement('div');
+    name.className = 'st-set-name';
+    name.id = 'pt-shinri-identity-name';
+    name.textContent = 'Идентификатор Shinri Hub';
+    var help = document.createElement('div');
+    help.className = 'st-set-desc';
+    help.id = 'pt-shinri-identity-help';
+    help.textContent = 'Включает совместимость при выборе серверов Shinri Trial. Подключения Panopticon остаются обычными. Меняется до запуска игры.';
+    labels.append(name, help);
+    var toggle = document.createElement('label');
+    toggle.className = 'st-toggle';
+    var input = document.createElement('input');
+    input.id = 'pt-shinri-identity';
+    input.type = 'checkbox';
+    input.disabled = true;
+    input.setAttribute('role', 'switch');
+    input.setAttribute('aria-labelledby', name.id);
+    input.setAttribute('aria-describedby', help.id);
+    var track = document.createElement('span'); track.className = 'st-toggle__track';
+    var thumb = document.createElement('span'); thumb.className = 'st-toggle__thumb';
+    toggle.append(input, track, thumb);
+    row.append(labels, toggle);
+    var error = document.createElement('p');
+    error.className = 'st-set-desc'; error.setAttribute('role', 'status'); error.hidden = true;
+    body.append(row, error); section.append(header, body); viewport.append(section);
+    var saved = false;
+    var writing = false;
+    var active = false;
+    function disabled() { input.disabled = writing || active; }
+    function refreshActive() {
+      if (!viewport.isConnected) return;
+      window.electron.invoke('getGmodPid').then(function (pid) { active = !!pid; disabled(); }).catch(function () { input.disabled = true; });
+    }
+    var onPid = function (pid) { active = !!pid; disabled(); };
+    var onLaunch = function (state) { if (state) { active = true; disabled(); } else refreshActive(); };
+    window.electron.on('gmodUpdatePid', onPid);
+    window.electron.on('gmodLaunchState', onLaunch);
+    var cleanup = new MutationObserver(function () {
+      if (viewport.isConnected) return;
+      window.electron.removeListener('gmodUpdatePid', onPid);
+      window.electron.removeListener('gmodLaunchState', onLaunch);
+      cleanup.disconnect();
+    });
+    cleanup.observe(document.body, {childList: true, subtree: true});
+    window.electron.invoke('store', 'get', 'shinriIdentity').then(function (value) {
+      saved = value === true; input.checked = saved; refreshActive();
+    }).catch(function () { error.textContent = 'Не удалось прочитать идентификатор Shinri Hub.'; error.hidden = false; });
+    input.addEventListener('change', async function () {
+      var desired = input.checked;
+      writing = true; disabled(); error.hidden = true;
+      try { await window.electron.invoke('store', 'set', 'shinriIdentity', desired); saved = desired; }
+      catch (_) { error.textContent = 'Измените идентификатор после выхода из игры. Если игра закрыта, проверьте доступ к настройкам.'; error.hidden = false; }
+      finally { input.checked = saved; writing = false; refreshActive(); }
+    });
+    identitySettings.set(viewport, {refresh: refreshActive});
+  }
 
   function syncDrag(viewport) {
     var host = viewport && viewport.closest('.hub.drag-window');
@@ -101,7 +171,7 @@
     var rect = viewport.getBoundingClientRect();
     if (event.clientX < rect.left || event.clientX >= rect.right ||
         event.clientY < rect.top || event.clientY >= rect.bottom) return;
-    if (event.target instanceof Element && event.target.closest('select, .st-dialog-dim')) return;
+    if (event.target instanceof Element && event.target.closest('.st-dialog-dim')) return;
     var scroll = viewports.get(viewport);
     if (scroll) scroll(event);
   }
@@ -124,88 +194,26 @@
     }
   }
 
-  function makeRegionControl(row, original, originalDescription) {
-    var select = document.createElement('select');
-    select.className = 'st-dd__btn';
-    select.style.cssText = 'flex-shrink:0;width:min(288px, 52%);background:#141414';
-    select.disabled = true;
-    for (var choice of ['cis', 'eu']) select.add(new Option(choice, choice));
-
-    var description = document.createElement('div');
-    description.className = 'st-set-desc';
-    description.id = 'pt-settings-region-help';
-    select.setAttribute('aria-describedby', description.id);
-    var error = document.createElement('div');
-    error.className = 'st-set-desc';
-    error.setAttribute('role', 'status');
-    error.hidden = true;
-
-    original.hidden = true;
-    originalDescription.hidden = true;
-    originalDescription.after(description, error);
-    row.append(select);
-
-    var control = {select: select, description: description, error: error, copy: null};
-    var saved = 'cis';
-    loadRegion().then(function (region) { saved = region; }).catch(function () {
-      error.textContent = control.copy.loadError;
-      error.hidden = false;
-    }).finally(function () {
-      select.value = saved;
-      select.disabled = false;
-    });
-    select.addEventListener('change', async function () {
-      var desired = select.value;
-      if (desired === saved) return;
-      select.disabled = true;
-      error.hidden = true;
-      try {
-        saved = await loadRegion(desired);
-      } catch (_) {
-        error.textContent = control.copy.error;
-        error.hidden = false;
-      } finally {
-        select.value = saved;
-        select.disabled = false;
-      }
-    });
-    return control;
-  }
-
-  function configureRegion(viewport) {
-    for (var row of viewport.querySelectorAll('.st-set-row')) {
-      var name = row.querySelector('.st-set-name');
-      var label = name && name.textContent.trim();
-      var copy = Object.prototype.hasOwnProperty.call(descriptions, label) && descriptions[label];
-      if (!copy) continue;
-      var original = row.querySelector('.st-dd');
-      var originalDescription = row.querySelector('.st-set-desc');
-      if (!original || !originalDescription) return;
-      var labels = original.querySelectorAll('.st-dd__opt');
-      if (labels.length !== 2) return;
-      var control = regionControls.get(row);
-      if (!control) {
-        control = makeRegionControl(row, original, originalDescription);
-        regionControls.set(row, control);
-      }
-      control.copy = copy;
-      if (control.description.textContent !== copy.help) {
-        control.description.textContent = copy.help;
-        control.select.setAttribute('aria-label', label);
-        for (var i = 0; i < labels.length; i++) {
-          control.select.options[i].text = labels[i].textContent.trim();
-        }
-      }
-      return;
-    }
-  }
+  window.PTHubGameRegion = {
+    descriptions: descriptions,
+    async read() {
+      try { await pendingRegionWrite; } catch (_) { /* Read the saved value after a failed write. */ }
+      return loadRegion();
+    },
+    async write(value) {
+      var write = loadRegion(value);
+      pendingRegionWrite = write;
+      try { return await write; }
+      finally { if (pendingRegionWrite === write) pendingRegionWrite = null; }
+    },
+  };
 
   function refresh() {
     var viewport = document.querySelector(viewportSelector);
     syncDrag(viewport);
     if (!viewport) return;
     configureScroll(viewport);
-    configureRegion(viewport);
+    configureIdentity(viewport);
   }
 
   function start() {

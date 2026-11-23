@@ -132,9 +132,11 @@
         if (settings) {
             setText(settings.title, labels.title);
             setText(settings.label, labels.mode);
-            for (const option of settings.select.options) setText(option, labels[option.value]);
-            settings.select.value = mode || '';
-            settings.select.disabled = !mode || savingMode || phase === 'installing' || phase === 'started';
+            settings.modeControl.update({
+                value: mode,
+                options: modes.map(value => ({value, label: labels[value]})),
+                locked: !mode || savingMode || phase === 'installing' || phase === 'started',
+            });
             setText(settings.version, version ? labels.installed + ' ' + version : '');
             setText(settings.check, labels.check);
             settings.check.disabled = busy();
@@ -232,11 +234,14 @@
         const body = element('div', 'st-block__body');
         const row = element('div', 'st-set-row');
         const label = element('label', 'st-set-name');
-        const select = element('select', 'st-dd__btn pt-update-mode');
-        label.htmlFor = select.id = 'pt-update-mode';
-        for (const value of modes) select.add(new Option('', value));
-        select.addEventListener('change', () => { void saveMode(select.value); });
-        row.append(label, select);
+        const mount = element('div', 'pt-update-mode-mount');
+        label.id = 'pt-update-mode-label';
+        label.htmlFor = 'pt-update-mode';
+        const modeControl = window.PTHubMountDropdown(mount, {
+            id: 'pt-update-mode', labelledBy: label.id, className: 'pt-update-mode',
+            fixed: true, onChange: value => { void saveMode(value); },
+        });
+        row.append(label, mount);
 
         const actionRow = element('div', 'st-set-row');
         const version = element('span', 'st-set-desc');
@@ -253,7 +258,7 @@
         body.append(row, modeStatus, actionRow, releaseTitle, notes, status, installButton);
         section.append(title, body);
         viewport.append(section);
-        return {viewport, section, title, label, select, version, check: checkButton, releaseTitle, notes, status, modeStatus, install: installButton};
+        return {viewport, section, title, label, modeControl, version, check: checkButton, releaseTitle, notes, status, modeStatus, install: installButton};
     }
 
     function showPrompt() {
@@ -348,9 +353,11 @@
 
     function syncDom() {
         const viewport = document.querySelector('.modal.m-settings > .modal-body');
-        if (!viewport) {
+        if (!viewport || !window.PTHubMountDropdown) {
+            settings?.modeControl.dispose();
             settings = undefined;
         } else if (settings?.viewport !== viewport || !viewport.contains(settings.section)) {
+            settings?.modeControl.dispose();
             settings = buildSettings(viewport);
             render();
         }

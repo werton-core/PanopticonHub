@@ -1,7 +1,8 @@
 -- Реконструкция: адаптер подлинного HTML renderer к стандартному Steam GMod.
--- Здесь нет чужого нативного хоста, защиты, имитации ST или обхода допуска.
+-- Совместимость Shinri включается отдельно; игровой процесс и Steam остаются штатными.
 stMenu = stMenu or {}
 local hub = stMenu
+if hub.PanopticonReady then hub.Ready() return end
 local directory = include("menu/panopticon_directory.lua")
 local favorites = include("menu/panopticon_favorites.lua")
 local native = directory.Native
@@ -12,6 +13,7 @@ end
 local categoryCodes = {lobby = "l", game = "f", story = "g", test = "t", media = "m", favorite = "favorite"}
 local rendererCategories = {game = "fast_game", story = "game"}
 local serversByAddress = {}
+local connectedProjects = {}
 local scan = 0
 local revision = 0
 local menuDefaults = {mainMenuMusic = true, menuSoundEffects = true, musicVolume = 0.3}
@@ -112,6 +114,7 @@ function hub.ScanServers(token, requestId)
         serversByAddress = {}
         for _, server in ipairs(servers) do
             if validAddress(server.address) then
+                server.project = selection.project
                 serversByAddress[server.address] = server
                 call("AddServer", token, requestId, server.ping or 0, server.name, "", server.map or "",
                     server.players or "—", server.maxplayers or "—", 0, server.password == true, 0, server.address, "",
@@ -174,6 +177,7 @@ local function updateCurrentServer(inGame, force)
     if not currentServer or currentServer.address ~= address then
         local row = serversByAddress[address]
         currentServer = {address = address, name = row and row.name,
+            project = connectedProjects[address] or row and row.project,
             online = row and tonumber(row.players), maxPlayers = row and tonumber(row.maxplayers)}
         lastPing = nil
         force = true
@@ -193,6 +197,41 @@ local function updateCurrentServer(inGame, force)
     end)
 end
 
+local connection = include("menu/panopticon_identity.lua").New({
+    now = SysTime,
+    valid = function(address, confirmed)
+        local inGame, loading = gameState()
+        if loading or not validAddress(address) then return false end
+        if inGame then return address ~= currentAddress() and confirmed == currentAddress() end
+        return confirmed == nil
+    end,
+    prepare = function(address, project)
+        if not native or not native.PrepareConnection then return {status = "error", message = "Игровой модуль Hub недоступен."} end
+        return util.JSONToTable(native.PrepareConnection(address, project) or "")
+    end,
+    poll = function(id) return util.JSONToTable(native.PollConnection(id) or "") end,
+    cancel = function() if native and native.CancelConnection then native.CancelConnection() end end,
+    status = function(value) call("PTHubConnectionPreparation", value) end,
+    error = settingsError,
+    idle = function() local inGame, loading = gameState() return not inGame and not loading end,
+    reset = function()
+        if not native or not native.ResetConnectionProtocol then return false, "Игровой модуль Hub недоступен." end
+        return native.ResetConnectionProtocol()
+    end,
+    join = function(address, retry, project)
+        if retry then
+            local inGame, loading = gameState()
+            if not reconnect.Take(address, inGame, loading) then return end
+        else reconnect.Clear(currentAddress()) end
+        call("PTHubReconnect", nil)
+        hub.SetMicrophoneTest(false)
+        connectedProjects[address] = project
+        JoinServer(address)
+    end,
+})
+hub.Connection = connection
+function hub.CancelConnection() connection.Cancel() end
+
 function hub.ConnectToServer(address, confirmedAddress)
     local inGame, loading = gameState()
     if loading then return end
@@ -203,15 +242,13 @@ function hub.ConnectToServer(address, confirmedAddress)
 
     local server = serversByAddress[address]
     if not server or server.connectable == false then return end
-    reconnect.Clear(currentAddress())
-    call("PTHubReconnect", nil)
-    hub.SetMicrophoneTest(false)
-    JoinServer(address)
+    connection.Start(address, confirmedAddress, false, server.project or selection.project)
 end
 
 function hub.DisconnectFromServer(confirmedAddress)
     local inGame, loading = gameState()
     if not inGame or loading or confirmedAddress ~= currentAddress() then return end
+    connection.Cancel()
     reconnect.Clear(confirmedAddress)
     call("PTHubReconnect", nil)
     hub.SetMicrophoneTest(false)
@@ -228,11 +265,9 @@ end
 
 function hub.RetryConnection(address)
     local inGame, loading = gameState()
-    local target = reconnect.Take(address, inGame, loading)
-    if not target then return end
-    call("PTHubReconnect", nil)
-    hub.SetMicrophoneTest(false)
-    JoinServer(target)
+    local target = reconnect.Get()
+    if inGame or loading or not target or target.address ~= address then return end
+    connection.Start(address, nil, true, target.project or connectedProjects[address] or "panopticon")
 end
 function hub.RequestLoading()
     local _, loading = gameState()
@@ -264,7 +299,8 @@ local function writeClientConfig(changes)
     return native.ApplySharedSettings(util.TableToJSON(changes))
 end
 local loadingSettings = {
-    loadingIndicator = {get = "GetLoadingIndicator", set = "SetLoadingIndicator", label = "Штатный индикатор загрузки"}
+    loadingIndicator = {get = "GetLoadingIndicator", set = "SetLoadingIndicator", default = false, label = "Штатный индикатор загрузки"},
+    shinriIdentity = {get = "GetShinriIdentity", set = "SetShinriIdentity", default = true, label = "Идентификатор Shinri Hub"}
 }
 local function loadingValue(setting)
     if native and native[setting.get] and native[setting.set] then return native[setting.get]() end
@@ -292,10 +328,21 @@ function hub.RequestSharedSettings()
     end
     call("STSharedSettings", withLoadingSettings(values))
 end
+local function nativeBindings(name)
+    local raw = native and native[name] and native[name]()
+    return raw and util.JSONToTable(raw) or {}
+end
 function hub.RequestBindings()
-    local values = {}
-    for command in pairs(bindingCommands) do values[command] = input.LookupBinding(command, true) or "" end
-    for command in pairs(customBindings) do values[command] = input.LookupBinding(command, true) or "" end
+    local pending = nativeBindings("ReadEngineBindings")
+    local values = nativeBindings("ReadCustomBindings")
+    local reserved = {}
+    for command, key in pairs(pending) do
+        if key ~= "" then reserved[key:upper()] = command end
+    end
+    for command in pairs(bindingCommands) do
+        local actual = input.LookupBinding(command, true) or ""
+        values[command] = pending[command] or (not reserved[actual:upper()] and actual) or ""
+    end
     call("STBindings", values)
 end
 function hub.RequestVideoModes()
@@ -349,7 +396,10 @@ function hub.ApplySharedSettings(raw)
         local default = sharedDefaults[key]
         local loadingSetting = loadingSettings[key]
         if loadingSetting and isbool(value) then
-            loadingTouched = saveLoadingSetting(loadingSetting, value, "сохранить") or loadingTouched
+            if key == "shinriIdentity" and connection.Busy() then
+                settingsError("Дождитесь подготовки подключения или отмените её.")
+                hub.RequestSharedSettings()
+            else loadingTouched = saveLoadingSetting(loadingSetting, value, "сохранить") or loadingTouched end
         elseif key == "musicVolume" and finite(value) then
             shared[key], menuChanged = math.Clamp(value, 0, 1), true
         elseif type(menuDefaults[key]) == "boolean" and isbool(value) then
@@ -418,15 +468,41 @@ function hub.SetBindCapture(enabled)
     end)
 end
 
-function hub.ApplyBinding(command, key)
-    if not (bindingCommands[command] or customBindings[command]) or (key ~= "" and not bindableKey(key)) then return end
-    if key ~= "" and isfunction(input.GetKeyCode) and (input.GetKeyCode(key:lower()) or 0) <= 0 then return end
-    local old = input.LookupBinding(command, true)
-    if isstring(old) and old:upper() == key:upper() then return end
-    if isstring(old) and old ~= "" then RunConsoleCommand("unbind", old) end
-    if key ~= "" then RunConsoleCommand("bind", key, command) end
-    saveEngine()
-    timer.Simple(0, hub.RequestBindings)
+function hub.ApplyBindings(raw)
+    local changes = isstring(raw) and #raw <= 4096 and util.JSONToTable(raw)
+    if not istable(changes) then return end
+
+    local pending = nativeBindings("ReadEngineBindings")
+    local stock, custom = {}, {}
+    for command, key in pairs(changes) do
+        if not (bindingCommands[command] or customBindings[command]) or (key ~= "" and not bindableKey(key)) then
+            settingsError("Недопустимая привязка клавиши.")
+            hub.RequestBindings()
+            return
+        end
+        local code = key == "" and -1 or (input.GetKeyCode(key:lower()) or 0)
+        if code == 0 or code == KEY_ESCAPE then
+            settingsError("Garry’s Mod не распознал выбранную клавишу.")
+            hub.RequestBindings()
+            return
+        end
+        if customBindings[command] then
+            custom[command] = code
+        else
+            local current = pending[command] or input.LookupBinding(command, true) or ""
+            if current:upper() ~= key:upper() then stock[command] = key end
+        end
+    end
+    if next(stock) and not (native and native.QueueEngineBindings and native.QueueEngineBindings(util.TableToJSON(stock))) then
+        settingsError("Не удалось сохранить привязки Garry’s Mod.")
+    end
+    for command, code in pairs(custom) do
+        if not (native and native.SetCustomBinding and native.SetCustomBinding(command, code)) then
+            settingsError("Не удалось применить клавишу действия Panopticon.")
+            break
+        end
+    end
+    hub.RequestBindings()
 end
 function hub.ApplyVideoMode(width, height, mode)
     if native and native.ApplyVideoMode and native.ApplyVideoMode(tonumber(width), tonumber(height), mode) then
@@ -435,7 +511,6 @@ function hub.ApplyVideoMode(width, height, mode)
         settingsError("Не удалось применить выбранный видеорежим.")
     end
 end
-function hub.ApplyCustomBind(command, key) hub.ApplyBinding(command, key) end
 
 local voiceTimer = "PanopticonHub.VoiceTest"
 local voiceStatus = "idle"
@@ -542,11 +617,13 @@ function hub.OpenURL(url)
     settingsError("Не удалось открыть эту ссылку.")
 end
 function hub.Quit()
+    connection.Cancel()
     stopVoiceTest("idle")
     if native and native.GameAction and native.GameAction("Quit") then return end
     RunGameUICommand("QuitNoConfirm")
 end
 function hub.ResetAllSettings()
+    if connection.Busy() then settingsError("Сначала отмените подготовку подключения.") return end
     for _, command in pairs(engineMap) do
         local value = GetConVar(command)
         if value then RunConsoleCommand(command, value:GetDefault()) end
@@ -557,7 +634,7 @@ function hub.ResetAllSettings()
     end
     shared = table.Copy(menuDefaults)
     cookie.Set(menuCookie, util.TableToJSON(shared))
-    for _, setting in pairs(loadingSettings) do saveLoadingSetting(setting, false, "сбросить") end
+    for _, setting in pairs(loadingSettings) do saveLoadingSetting(setting, setting.default, "сбросить") end
     local reset
     if IsInGame() then
         local defaults = table.Copy(sharedDefaults)
@@ -567,10 +644,14 @@ function hub.ResetAllSettings()
         reset = native and native.ResetSharedSettings and native.ResetSharedSettings()
     end
     if not reset then settingsError("Не удалось сбросить настройки этого клиента.") end
-    for command in pairs(customBindings) do hub.ApplyBinding(command, "") end
-    local defaults = file.Read("cfg/config_default.cfg", "GAME") or ""
-    for key, command in defaults:gmatch('bind%s+"([^"]+)"%s+"([^"]+)"') do
-        if bindingCommands[command] then hub.ApplyBinding(command, key) end
+    if not (native and native.QueueEngineBindings and native.QueueEngineBindings(nil)) then
+        settingsError("Не удалось восстановить штатные привязки Garry’s Mod.")
+    end
+    for command in pairs(nativeBindings("ReadCustomBindings")) do
+        if not native.SetCustomBinding(command, nil) then
+            settingsError("Не удалось восстановить клавиши Panopticon.")
+            break
+        end
     end
     saveEngine()
     timer.Simple(0.2, function()
@@ -585,6 +666,7 @@ function hub.Ready()
     hub.ApplyHubLanguage()
     hub.RequestInGame()
     hub.RequestLoading()
+    call("PTHubConnectionPreparation", connection.Get())
     hub.RequestEngineSettings()
     hub.RequestSharedSettings()
     hub.RequestBindings()
@@ -614,7 +696,6 @@ function hub.Ready()
 end
 function hub.CompleteIntro()
     hub.IntroCompleted = true
-    if PanopticonEnableBackgrounds then PanopticonEnableBackgrounds() end
 end
 function STSetLoadingTranslations() end
 function STSetDiscordTranslations() end
@@ -623,7 +704,9 @@ if istable(stored) then for key in pairs(shared) do if type(stored[key]) == type
 shared["volume.effects"] = tonumber(readClientConfig()["volume.effects"])
 local lastInGame, lastLoading, lastReconnect
 timer.Create("PanopticonHub.Loading", 0.15, 0, function()
+    connection.Poll()
     local inGame, loading = gameState()
+    if (lastInGame or lastLoading) and not inGame and not loading then connection.Cleanup() end
     if inGame ~= lastInGame then
         lastInGame = inGame
         call("SetInGame", inGame)
@@ -646,3 +729,4 @@ concommand.Add("panopticon_hub_menu", function()
     if IsValid(pnlMainMenu) and IsValid(pnlMainMenu.HTML) then pnlMainMenu.HTML:OpenURL("asset://garrysmod/html/menu.html") gui.ActivateGameUI() end
 end)
 hub.ValidAddress = validAddress
+hub.PanopticonReady = true

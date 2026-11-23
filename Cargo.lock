@@ -906,6 +906,7 @@ name = "hub-backend"
 version = "0.2.0"
 dependencies = [
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -1553,7 +1554,7 @@ dependencies = [
 
 [[package]]
 name = "panopticon-hub"
-version = "0.2.36"
+version = "0.2.41"
 dependencies = [
  "crc32fast",
  "hub-backend",
@@ -1575,8 +1576,11 @@ dependencies = [
 name = "panopticon-native"
 version = "0.2.0"
 dependencies = [
+ "crc32fast",
+ "hub-backend",
  "libloading 0.8.9",
  "serde_json",
+ "sha2",
  "tempfile",
  "windows-sys 0.59.0",
  "winresource",
@@ -1584,7 +1588,7 @@ dependencies = [
 
 [[package]]
 name = "panopticon-setup"
-version = "0.2.36"
+version = "0.2.41"
 dependencies = [
  "serde",
  "serde_json",

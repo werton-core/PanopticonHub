@@ -470,6 +470,8 @@ pub fn run(steam_root: &Path, game_root: &Path) -> Result<(), String> {
     recover(&root, &journal, &settings)?;
     recover(&root, &ordinary(&root, LEGACY_LAB_STATE)?, &settings)?;
     recover(&root, &ordinary(&root, LAB_STATE)?, &settings)?;
+    let cfg = ordinary(&root, "cfg")?;
+    hub_backend::bindings::flush(&cfg)?;
 
     if !GAME_FILES.iter().any(|(name, _)| *name == "html/menu.html") {
         return Err("В сборке отсутствует игровое меню Panopticon.".into());
@@ -607,6 +609,9 @@ pub fn run(steam_root: &Path, game_root: &Path) -> Result<(), String> {
         session.settings = None;
     }
     restore(&root, &journal, &settings, &session, played)?;
+    if played {
+        hub_backend::bindings::flush(&cfg)?;
+    }
     result
 }
 

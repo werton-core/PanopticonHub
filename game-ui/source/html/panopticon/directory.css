@@ -216,9 +216,8 @@
     .pt-session-action__label { font-size: 21px; }
 }
 
-/* В референсе размыт только статичный фон. Размытие 35px запечено под высоту макета 1080px. */
 .settings-page {
-    background-image: url("./settings-background.webp");
+    background: none;
 }
 .settings-page__shade {
     -webkit-backdrop-filter: none;

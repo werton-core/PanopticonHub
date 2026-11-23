@@ -129,5 +129,10 @@
         if (showLevel) showMeter(level);
     };
 
-    new MutationObserver(syncPanel).observe(document.documentElement, { childList: true, subtree: true });
+    new MutationObserver(function () {
+        if (!panel && mode === 'idle') return;
+        var parent = panel && panel.parentElement;
+        if (parent && parent.isConnected && parent.matches('.settings-page__details')) return;
+        syncPanel();
+    }).observe(document.documentElement, { childList: true, subtree: true });
 })();

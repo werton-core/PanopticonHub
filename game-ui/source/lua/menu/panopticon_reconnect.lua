@@ -40,6 +40,7 @@ function Reconnect.New(validAddress, time)
             end
             joinedAt = joinedAt or now
             active.name = server.name or active.name
+            active.project = server.project or active.project
             if now - joinedAt >= ACTIVE_CONFIRMATION then
                 active.confirmed = true
                 retry = nil

@@ -1,0 +1,85 @@
+.m-settings {
+    --pt-settings-ease-out: cubic-bezier(.23, 1, .32, 1);
+    --pt-settings-popover-duration: 180ms;
+}
+
+.m-settings .st-dd {
+    max-width: 60%;
+}
+
+.pt-update-mode-mount {
+    display: contents;
+}
+
+.pt-region-error {
+    display: block;
+}
+
+.m-settings .st-dd > .st-dd__list {
+    display: block;
+    visibility: hidden;
+    opacity: 0;
+    transform: scale(.97);
+    transform-origin: top center;
+    pointer-events: none;
+    transition: opacity var(--pt-settings-popover-duration) var(--pt-settings-ease-out),
+        transform var(--pt-settings-popover-duration) var(--pt-settings-ease-out),
+        visibility 0s linear var(--pt-settings-popover-duration);
+}
+
+.m-settings .st-dd.open > .st-dd__list {
+    visibility: visible;
+    opacity: 1;
+    transform: none;
+    pointer-events: auto;
+    transition-delay: 0s;
+}
+
+.m-settings .st-dd.pt-dropdown-up > .st-dd__list {
+    top: auto;
+    bottom: calc(100% + 6px);
+    transform-origin: bottom center;
+}
+
+.m-settings .st-dd__opt:focus-visible {
+    outline: 2px solid var(--st-gold);
+    outline-offset: -2px;
+}
+
+.m-settings .st-dd__btn[aria-disabled=true] {
+    opacity: .55;
+    cursor: wait;
+}
+
+.m-settings .st-toggle .st-toggle__track {
+    transition: background-color 200ms ease, border-color 200ms ease;
+}
+
+.m-settings .st-toggle .st-toggle__thumb {
+    transition: transform 200ms var(--pt-settings-ease-out), box-shadow 200ms ease;
+}
+
+.m-settings .st-toggle input:checked ~ .st-toggle__thumb {
+    left: 3px;
+    transform: translateX(19px);
+}
+
+@media (max-width: 450px) {
+    .m-settings .st-dd.pt-update-mode { width: 100%; max-width: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .m-settings { --pt-settings-popover-duration: 130ms; }
+    .m-settings .st-dd > .st-dd__list {
+        transform: none;
+        transition: opacity var(--pt-settings-popover-duration) ease,
+            visibility 0s linear var(--pt-settings-popover-duration) !important;
+    }
+    .m-settings .st-dd.open > .st-dd__list { transition-delay: 0s !important; }
+    .m-settings .st-toggle .st-toggle__track {
+        transition: background-color 130ms ease, border-color 130ms ease !important;
+    }
+    .m-settings .st-toggle .st-toggle__thumb {
+        transition: transform 140ms var(--pt-settings-ease-out) !important;
+    }
+}

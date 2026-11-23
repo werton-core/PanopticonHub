@@ -28,11 +28,31 @@
         }, 0);
     }
 
+    function readableAccent(rgb, minimum) {
+        // Keep the chosen hue and saturation while raising brightness first.
+        var peak = Math.max.apply(Math, rgb);
+        var vivid = peak ? rgb.map(function (value) { return Math.round(value * 255 / peak); }) : [0, 0, 0];
+        function at(amount) {
+            return amount <= 1
+                ? rgb.map(function (value, index) { return Math.round(value + (vivid[index] - value) * amount); })
+                : vivid.map(function (value) { return Math.round(value + (255 - value) * (amount - 1)); });
+        }
+        if (luminance(rgb) >= minimum) return rgb;
+        var low = 0, high = 1;
+        if (luminance(vivid) < minimum) { low = 1; high = 2; }
+        for (var step = 0; step < 12; step++) {
+            var middle = (low + high) / 2;
+            if (luminance(at(middle)) < minimum) low = middle;
+            else high = middle;
+        }
+        return at(high);
+    }
+
     if (typeof profile.accent === 'string' && /^#[0-9a-f]{6}$/i.test(profile.accent)) {
         var rgb = profile.accent.slice(1).match(/../g).map(function (pair) { return parseInt(pair, 16); });
         var websiteColors = websiteStyle && profile.accent.toLowerCase() === '#f0504f';
-        var text = websiteColors ? [255, 156, 154] : rgb;
-        while (luminance(text) < 0.24) {
+        var text = websiteColors ? [255, 102, 86] : websiteStyle ? readableAccent(rgb, .24) : rgb;
+        while (!websiteStyle && luminance(text) < 0.24) {
             text = text.map(function (value) { return Math.round(value + (255 - value) * 0.12); });
         }
         root.style.setProperty('--pt-accent', profile.accent);
@@ -40,7 +60,7 @@
         root.style.setProperty('--pt-accent-rgb', rgb.join(', '));
         root.style.setProperty('--pt-accent-text-rgb', text.join(', '));
         root.style.setProperty('--pt-accent-text', 'rgb(' + text.join(', ') + ')');
-        var pale = text.map(function (value) { return Math.round(value + (255 - value) * 0.29); });
+        var pale = websiteStyle ? readableAccent(text, .3) : text.map(function (value) { return Math.round(value + (255 - value) * 0.29); });
         root.style.setProperty('--pt-accent-pale-rgb', pale.join(', '));
         function shade(level) {
             return 'rgb(' + text.map(function (value) { return Math.round(value * level / 100); }).join(', ') + ')';
@@ -62,6 +82,7 @@
         };
         root.style.setProperty('--pt-accent-ink', !websiteColors && luminance(rgb) > 0.179 ? '#000' : '#fff');
         root.classList.add('pt-design-accent');
+        if (websiteStyle) root.classList.add('pt-design-panopticon');
     }
 
     var logoUrl = !isBrowserToolbar && mediaUrl('gameLogo', imageExtensions);
@@ -130,7 +151,7 @@
         return !!backgroundUrl(key) || (key === 'gameBrowserBackground' && !!chooserFilter);
     }
 
-    function mountBackground(container, key, onReady) {
+    function mountBackground(container, key, onReady, canPlay) {
         var url = backgroundUrl(key);
         var carousel = key === 'gameBrowserBackground' && chooserFilter && stockChooser(container);
 
@@ -174,11 +195,12 @@
         function fallback() {
             if (disposed) return;
             removeCustom();
-            if (ready && onReady) onReady(false);
+            if (onReady) onReady(false);
         }
 
         function updatePlayback() {
-            if (document.hidden) media.pause();
+            if (disposed || !isVideo) return;
+            if (document.hidden || (canPlay && !canPlay())) media.pause();
             else media.play().catch(function (error) {
                 if (error.name !== 'AbortError') fallback();
             });
@@ -203,10 +225,12 @@
         container.appendChild(media);
         media.src = url;
         if (isVideo) updatePlayback();
-        return function () {
+        var unmount = function () {
             removeCustom();
             removeStock();
         };
+        unmount.updatePlayback = updatePlayback;
+        return unmount;
     }
 
     function accentIcon(url) {

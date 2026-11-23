@@ -11,6 +11,8 @@ mod shared_settings;
 mod video;
 mod voice;
 mod window;
+mod shinri_protocol;
+mod shinri_network;
 
 type Lua = *mut c_void;
 type Interface = *mut c_void;
@@ -415,6 +417,67 @@ unsafe extern "C" fn reset_shared_settings(lua: Lua) -> c_int {
     1
 }
 
+unsafe extern "C" fn read_engine_bindings(lua: Lua) -> c_int {
+    let Some(api) = LuaApi::get() else { return 0 };
+    let pending = shared_settings::config().ok()
+        .and_then(|config| hub_backend::bindings::pending(&config.parent()?.parent()?.join("cfg")).ok())
+        .and_then(|bindings| serde_json::to_value(bindings).ok());
+    unsafe { api.json(lua, pending) }
+}
+
+unsafe extern "C" fn queue_engine_bindings(lua: Lua) -> c_int {
+    let Some(api) = LuaApi::get() else { return 0 };
+    let result = (|| {
+        let config = shared_settings::config().ok()?;
+        if unsafe { api.game_flag(lua, c"IsInLoading") } != Some(false) { return None; }
+        let cfg = config.parent()?.parent()?.join("cfg");
+        if unsafe { (api.lua_type)(lua, 1) } == 0 {
+            return hub_backend::bindings::reset(&cfg).ok();
+        }
+        let mut length = 0;
+        let raw = unsafe { (api.read_string)(lua, 1, &mut length) };
+        if raw.is_null() || length > 4096 { return None; }
+        let raw = unsafe { std::slice::from_raw_parts(raw.cast(), length) };
+        hub_backend::bindings::queue(&cfg, raw).ok()
+    })();
+    unsafe { (api.push_boolean)(lua, i32::from(result.is_some())) };
+    1
+}
+
+unsafe extern "C" fn read_custom_bindings(lua: Lua) -> c_int {
+    let Some(api) = LuaApi::get() else { return 0 };
+    let available = shared_settings::config().is_ok()
+        && unsafe { api.game_flag(lua, c"IsInGame") } == Some(true)
+        && unsafe { api.game_flag(lua, c"IsInLoading") } == Some(false);
+    unsafe { api.json(lua, available.then(client_settings::read_bindings).flatten()) }
+}
+
+unsafe extern "C" fn set_custom_binding(lua: Lua) -> c_int {
+    let Some(api) = LuaApi::get() else { return 0 };
+    let result = (|| {
+        shared_settings::config().ok()?;
+        if unsafe { api.game_flag(lua, c"IsInGame") } != Some(true)
+            || unsafe { api.game_flag(lua, c"IsInLoading") } != Some(false) { return None; }
+        let mut length = 0;
+        let command = unsafe { (api.read_string)(lua, 1, &mut length) };
+        if command.is_null() || length > 30 { return None; }
+        let bytes = unsafe { std::slice::from_raw_parts(command.cast(), length) };
+        let command = std::str::from_utf8(bytes).ok()?.to_owned();
+        let key = match unsafe { (api.lua_type)(lua, 2) } {
+            0 => None,
+            3 => {
+                let number = unsafe { (api.read_number)(lua, 2) };
+                if number != f64::from(number as i32) { return None; }
+                Some(number as i32)
+            }
+            _ => return None,
+        };
+        client_settings::apply_binding(&command, key)
+    })();
+    unsafe { (api.push_boolean)(lua, i32::from(result.is_some())) };
+    1
+}
+
 unsafe extern "C" fn get_server_loading_screens(lua: Lua) -> c_int {
     let Some(api) = LuaApi::get() else { return 0 };
     let Some(enabled) = shared_settings::server_loading_screens() else { return 0 };
@@ -442,6 +505,84 @@ unsafe extern "C" fn set_loading_indicator(lua: Lua) -> c_int {
     let applied = unsafe { (api.lua_type)(lua, 1) } == LUA_TBOOLEAN
         && shared_settings::set_loading_indicator(unsafe { (api.read_boolean)(lua, 1) != 0 }).is_ok();
     unsafe { (api.push_boolean)(lua, i32::from(applied)) };
+    1
+}
+
+unsafe extern "C" fn get_shinri_identity(lua: Lua) -> c_int {
+    let Some(api) = LuaApi::get() else { return 0 };
+    if shared_settings::config().is_err() { return 0; }
+    let enabled = hub_backend::identity::enabled().unwrap_or(false);
+    unsafe { (api.push_boolean)(lua, i32::from(enabled)) };
+    1
+}
+
+unsafe extern "C" fn set_shinri_identity(lua: Lua) -> c_int {
+    let Some(api) = LuaApi::get() else { return 0 };
+    let applied = (|| {
+        if unsafe { (api.lua_type)(lua, 1) } != LUA_TBOOLEAN || shared_settings::config().is_err()
+            || unsafe { api.game_flag(lua, c"IsInGame") } != Some(false)
+            || unsafe { api.game_flag(lua, c"IsInLoading") } != Some(false) || shinri_network::busy() {
+            return false;
+        }
+        let desired = unsafe { (api.read_boolean)(lua, 1) != 0 };
+        let previous = hub_backend::identity::enabled().unwrap_or(false);
+        // Режим включается для выбранного Shinri-сервера, а не для всей игры.
+        if !desired && shinri_protocol::set(false).is_err() { return false; }
+        if hub_backend::identity::set_enabled(desired).is_err() {
+            if previous { let _ = shinri_protocol::set(false); }
+            return false;
+        }
+        true
+    })();
+    unsafe { (api.push_boolean)(lua, i32::from(applied)) };
+    1
+}
+
+fn connection_reply(result: Result<serde_json::Value, String>) -> serde_json::Value {
+    result.unwrap_or_else(|message| serde_json::json!({"status":"error","message":message}))
+}
+
+unsafe extern "C" fn prepare_connection(lua: Lua) -> c_int {
+    let Some(api) = LuaApi::get() else { return 0 };
+    let result = (|| {
+        let config = shared_settings::config().map_err(|error| error.to_string())?;
+        let mut length = 0;
+        let address = unsafe { (api.read_string)(lua, 1, &mut length) };
+        if address.is_null() || length > 64 { return Err("Некорректный адрес подключения.".into()); }
+        let bytes = unsafe { std::slice::from_raw_parts(address.cast::<u8>(), length) };
+        let address = std::str::from_utf8(bytes).map_err(|_| "Некорректный адрес подключения.")?;
+        let mut project_length = 0;
+        let project = unsafe { (api.read_string)(lua, 2, &mut project_length) };
+        if project.is_null() || project_length > 16 { return Err("Не указан проект сервера.".into()); }
+        let project = unsafe { std::slice::from_raw_parts(project.cast::<u8>(), project_length) };
+        if project != b"shinri" && project != b"panopticon" { return Err("Неизвестный проект сервера.".into()); }
+        let root = config.parent().and_then(std::path::Path::parent).ok_or("Не найден каталог игры.")?;
+        shinri_network::start(address, root.to_path_buf(), project == b"shinri")
+    })();
+    unsafe { api.json(lua, Some(connection_reply(result))) }
+}
+
+unsafe extern "C" fn poll_connection(lua: Lua) -> c_int {
+    let Some(api) = LuaApi::get() else { return 0 };
+    let number = unsafe { (api.read_number)(lua, 1) };
+    let result = if number.is_finite() && number >= 1.0 && number <= 9_007_199_254_740_991.0 && number.fract() == 0.0 {
+        shinri_network::poll(number as u64)
+    } else { Err("Некорректная попытка подключения.".into()) };
+    unsafe { api.json(lua, Some(connection_reply(result))) }
+}
+
+unsafe extern "C" fn cancel_connection(_: Lua) -> c_int { shinri_network::cancel(); 0 }
+
+unsafe extern "C" fn reset_connection_protocol(lua: Lua) -> c_int {
+    let Some(api) = LuaApi::get() else { return 0 };
+    let idle = unsafe { api.game_flag(lua, c"IsInGame") } == Some(false)
+        && unsafe { api.game_flag(lua, c"IsInLoading") } == Some(false);
+    let result = if !idle || shinri_network::busy() { Err("busy".into()) } else { shinri_protocol::set(false) };
+    unsafe { (api.push_boolean)(lua, i32::from(result.is_ok())) };
+    if let Err(message)=result {
+        unsafe { (api.push_string)(lua,message.as_ptr().cast(),message.len()) };
+        return 2;
+    }
     1
 }
 
@@ -476,6 +617,16 @@ pub unsafe extern "C" fn gmod13_open(lua: Lua) -> c_int {
         (c"SetServerLoadingScreens", set_server_loading_screens),
         (c"GetLoadingIndicator", get_loading_indicator),
         (c"SetLoadingIndicator", set_loading_indicator),
+        (c"GetShinriIdentity", get_shinri_identity),
+        (c"SetShinriIdentity", set_shinri_identity),
+        (c"ReadEngineBindings", read_engine_bindings),
+        (c"QueueEngineBindings", queue_engine_bindings),
+        (c"ReadCustomBindings", read_custom_bindings),
+        (c"SetCustomBinding", set_custom_binding),
+        (c"PrepareConnection", prepare_connection),
+        (c"PollConnection", poll_connection),
+        (c"CancelConnection", cancel_connection),
+        (c"ResetConnectionProtocol", reset_connection_protocol),
     ];
     unsafe {
         (api.new_table)(lua, 0, methods.len() as c_int);
@@ -492,6 +643,8 @@ pub unsafe extern "C" fn gmod13_open(lua: Lua) -> c_int {
 /// Garry's Mod calls this when destroying the Lua realm.
 #[no_mangle]
 pub unsafe extern "C" fn gmod13_close(_: Lua) -> c_int {
+    shinri_network::shutdown();
+    let _ = shinri_protocol::set(false);
     voice::stop();
     0
 }

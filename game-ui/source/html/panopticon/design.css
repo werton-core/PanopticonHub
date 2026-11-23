@@ -24,8 +24,31 @@
     filter: var(--pt-design-menu-filter);
 }
 
-/* У штатных настроек уже размыт исходник. Цветокоррекция не трогает шторку и элементы поверх него. */
-.pt-design-filter-menu .settings-page::before,
+.pt-menu-backdrop {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    overflow: hidden;
+    background: #000;
+    pointer-events: none;
+}
+
+.pt-menu-backdrop[hidden],
+.pt-menu-backdrop[data-settings=true] > .st-menu__bg,
+.pt-menu-backdrop[data-settings=false] > .pt-menu-backdrop__settings { display: none; }
+
+.pt-menu-backdrop__settings {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.pt-design-panopticon .pt-menu-backdrop__settings { filter: brightness(.4392); }
+.pt-design-filter-menu .pt-menu-backdrop__settings { filter: var(--pt-design-menu-filter); }
+
 .pt-design-filter-loading body::before,
 .pt-design-filter-loading body::after,
 .pt-design-stock-chooser,
@@ -37,11 +60,6 @@
     bottom: 0;
     left: 0;
     pointer-events: none;
-}
-
-.pt-design-filter-menu .settings-page::before {
-    background: url('./settings-background.webp') center / cover no-repeat;
-    filter: var(--pt-design-menu-filter);
 }
 
 .pt-design-filter-loading body::before {
@@ -101,13 +119,13 @@ body > .pt-design-backdrop .pt-design-stock-chooser img:not(:first-child) { visi
     transform: scale(1.05);
 }
 
-.settings-page > .pt-design-backdrop .pt-design-backdrop__media {
+.pt-menu-backdrop[data-settings=true] .pt-design-backdrop__media {
     filter: var(--pt-design-media-filter, saturate(100%)) blur(35px);
     transform: scale(1.16);
 }
 
 .server-browser > .pt-design-backdrop::after,
-.settings-page > .pt-design-backdrop::after {
+.pt-menu-backdrop[data-settings=true] > .pt-design-backdrop::after {
     content: none;
 }
 
@@ -173,6 +191,14 @@ body > .pt-design-backdrop--ready + #root .browser-toolbar { background: #100c04
     --pt-accent-border: rgba(var(--pt-accent-text-rgb), .48);
     --pt-accent-inset-shadow: rgba(var(--pt-accent-text-rgb), .13);
     --pt-accent-toolbar-hover: rgba(var(--pt-accent-text-rgb), .22);
+}
+
+.pt-design-panopticon {
+    --pt-accent-wash: rgba(var(--pt-accent-rgb), .12);
+}
+
+.pt-design-panopticon .setting-row__label {
+    color: rgb(var(--pt-accent-pale-rgb));
 }
 
 .pt-design-accent .server-select__button:hover,

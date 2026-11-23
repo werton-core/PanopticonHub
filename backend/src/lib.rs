@@ -1,8 +1,10 @@
 //! Порт публичных IPC-контрактов. Игровой запуск и системные окна исполняет GUI-хост.
 
+pub mod bindings;
 mod http;
 pub mod steam;
 mod store;
+pub mod identity;
 
 use serde_json::{json, Value};
 
@@ -66,10 +68,16 @@ impl Backend {
         let args = arguments(args)?;
         match channel {
             "store" => match string(args, 0)? {
+                "get" if string(args, 1)? == identity::KEY => Ok(Some(json!(identity::enabled().unwrap_or(false)))),
                 "get" => Ok(self.store.get(string(args, 1)?).cloned()),
                 "set" => {
                     let key = string(args, 1)?;
                     let value = args.get(2).ok_or("Отсутствует значение store.set")?;
+                    if key == identity::KEY {
+                        if self.pid.is_some() { return Err("Измените идентификатор после выхода из игры.".into()); }
+                        identity::set_enabled(value.as_bool().ok_or("Идентификатор должен быть переключателем.")?)?;
+                        return Ok(None);
+                    }
                     let changed = self.store.get(key) != Some(value);
                     self.store.set(key, value.clone())?;
                     if changed && key == "animatedBackground" {

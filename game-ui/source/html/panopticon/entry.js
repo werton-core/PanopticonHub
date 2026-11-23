@@ -82,6 +82,36 @@
     window.addEventListener('keyup', keepVoiceSliderKeys, true);
 
     var settingsListSelector = '.settings-page__list';
+    var preparation;
+    var preparationPanel;
+    var connectionInGame = false, connectionLoading = false;
+    function identityLock() { window.PTHubIdentityLocked = connectionInGame || connectionLoading || !!preparation; }
+    window.PTHubConnectionPreparation = function (value) {
+        preparation = value;
+        identityLock();
+        if (!preparationPanel && value) {
+            preparationPanel = document.createElement('section');
+            preparationPanel.id = 'pt-connection-preparation';
+            preparationPanel.setAttribute('role', 'status');
+            preparationPanel.style.cssText = 'position:fixed;z-index:10000;bottom:48px;left:50%;transform:translateX(-50%);padding:18px 24px;background:#141414;color:#fff;border:1px solid #6c6c6c;font:16px sans-serif;display:flex;align-items:center;gap:24px';
+            var label = document.createElement('span');
+            label.textContent = 'Подготовка подключения Shinri…';
+            var cancel = document.createElement('button');
+            cancel.type = 'button';
+            cancel.textContent = 'Отменить (Esc)';
+            cancel.style.cssText = 'color:inherit;background:transparent;border:1px solid #888;padding:8px 14px;cursor:pointer';
+            cancel.addEventListener('click', function () { window.lua.Run('stMenu.CancelConnection()'); });
+            preparationPanel.append(label, cancel);
+            document.body.append(preparationPanel);
+        }
+        if (preparationPanel) preparationPanel.style.display = value ? 'flex' : 'none';
+    };
+    window.addEventListener('keydown', function (event) {
+        if (preparation && event.code === 'Escape') {
+            event.preventDefault(); event.stopImmediatePropagation();
+            window.lua.Run('stMenu.CancelConnection()');
+        }
+    }, true);
     var unavailableSettings = '[data-setting-id="discord-enabled"], [data-setting-id="admin-monowallhack"]';
 
     function hideUnavailableSettings(list) {
@@ -127,9 +157,15 @@
         }
         var setLoading = window.SetLoading;
         window.SetLoading = function (loading) {
+            connectionLoading = !!loading; identityLock();
             document.body.classList.toggle('pt-loading', !!loading);
             if (setLoading) setLoading(loading);
             if (loading && window.STOpenMenuPage) window.STOpenMenuPage('home');
+        };
+        var setInGame = window.SetInGame;
+        window.SetInGame = function (inGame) {
+            connectionInGame = !!inGame; identityLock();
+            if (setInGame) setInGame(inGame);
         };
     });
 })();

@@ -1,17 +1,12 @@
 include("menu/panopticon_loading_policy.lua")
 
 do
-    local drawBackground, changeBackground = DrawBackground, ChangeBackground
-    local clearImages, addImage = ClearBackgroundImages, AddBackgroundImage
-    local picturesEnabled = false
+    local drawBackground = DrawBackground
 
-    -- Штатное меню сканирует свои каталоги. Для этой сессии список задаёт Hub.
+    -- В сеансе Hub фон главного меню рисует HTML; движок рисует только паузу поверх игры.
     function ClearBackgroundImages() end
     function AddBackgroundImage() end
-
-    function ChangeBackground(...)
-        if picturesEnabled then changeBackground(...) end
-    end
+    function ChangeBackground() end
 
     function DrawBackground()
         if IsInGame() and not IsInLoading() then
@@ -21,17 +16,6 @@ do
 
         surface.SetDrawColor(0, 0, 0, 255)
         surface.DrawRect(0, 0, ScrW(), ScrH())
-        if picturesEnabled and not IsInLoading() then drawBackground() end
-    end
-
-    function PanopticonEnableBackgrounds()
-        if picturesEnabled then return end
-        picturesEnabled = true
-        clearImages()
-        addImage("../html/panopticon/backdrops/academy-01.jpg")
-        addImage("../html/panopticon/backdrops/academy-02.jpg")
-        addImage("../html/panopticon/backdrops/academy-03.jpg")
-        changeBackground()
     end
 end
 

@@ -64,6 +64,7 @@ fn main() {
     }
     for relative in [
         "lua/menu/panopticon_public.lua",
+        "lua/menu/panopticon_identity.lua",
         "lua/menu/panopticon_directory.lua",
         "lua/menu/panopticon_favorites.lua",
         "lua/menu/panopticon_reconnect.lua",

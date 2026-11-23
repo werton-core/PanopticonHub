@@ -6,12 +6,6 @@
     padding-bottom: 14px;
 }
 
-.pt-update-mode {
-    flex-shrink: 0;
-    width: min(288px, 55%);
-    color-scheme: dark;
-}
-
 .pt-update-button {
     flex: 0 1 auto;
     width: auto;
@@ -22,7 +16,6 @@
     text-align: center;
 }
 
-.pt-update-mode:focus-visible,
 .pt-update-button:focus-visible,
 .pt-update-choice input:focus-visible {
     outline: 2px solid var(--st-gold);
@@ -122,7 +115,4 @@
         flex-wrap: wrap;
     }
 
-    .pt-update-mode {
-        width: 100%;
-    }
 }

@@ -14,6 +14,18 @@ const GET_LUA_INTERFACE: usize = 6;
 const LUA_TOP: usize = 0;
 const GET_CLIENT_ABI: [u8; 9] = [0x0f, 0xb6, 0xc2, 0x48, 0x8b, 0x44, 0xc1, 0x78, 0xc3];
 const TOP_ABI: [u8; 5] = [0x48, 0x8b, 0x49, 0x08, 0xe9];
+const LAST_BUTTON_CODE: i32 = 171;
+const CLEARED_BINDING: i32 = -1;
+const CUSTOM_BINDINGS: &[(&str, &CStr)] = &[
+    ("+fast_actions", c"fast_actions"),
+    ("+interact", c"interact"),
+    ("+closelook", c"closelook"),
+    ("+inspect", c"inspect"),
+    ("+openinv", c"inventory"),
+    ("+dro_graffiti_place", c"graffiti"),
+    ("+dro_thirdperson_toggle", c"thirdperson"),
+    ("+dro_music_player", c"music_player"),
+];
 
 type Factory = unsafe extern "C" fn(*const c_char, *mut c_int) -> Interface;
 type GetLuaInterface = unsafe extern "system" fn(Interface, u8) -> Interface;
@@ -285,6 +297,39 @@ impl Client {
         }
         (!values.is_empty()).then_some(Value::Object(values))
     }
+
+    fn binding_code(&self, getter: &CStr, action: &CStr) -> Option<Option<i32>> {
+        self.function(&[c"DANGAN", c"Binds", getter], |client| {
+            client.string(action);
+            client.call(1, 1)?;
+            match client.stack_type() {
+                0 => Some(None),
+                3 => {
+                    let number = unsafe { (client.get_number)(client.state, -1) };
+                    (number.fract() == 0.0 && (1.0..=f64::from(LAST_BUTTON_CODE)).contains(&number))
+                        .then_some(Some(number as i32))
+                }
+                _ => None,
+            }
+        })
+    }
+
+    fn button_name(&self, code: i32) -> Option<String> {
+        self.function(&[c"input", c"GetKeyName"], |client| {
+            unsafe { (client.push_number)(client.state, f64::from(code)) };
+            client.call(1, 1)?;
+            if client.stack_type() != 4 {
+                return None;
+            }
+            let mut length = 0;
+            let ptr = unsafe { (client.get_string)(client.state, -1, &mut length) };
+            if ptr.is_null() || !(1..=64).contains(&length) {
+                return None;
+            }
+            let bytes = unsafe { std::slice::from_raw_parts(ptr.cast(), length) };
+            Some(std::str::from_utf8(bytes).ok()?.to_owned())
+        })
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -319,4 +364,47 @@ pub fn apply(patch: &Value) -> Option<Value> {
         let _ = client.set(mode, &name, value);
     }
     client.values(mode)
+}
+
+pub(super) fn read_bindings() -> Option<Value> {
+    let client = Client::open()?;
+    if client.gamemode()? != Gamemode::Panopticon {
+        return None;
+    }
+    let mut bindings = Map::new();
+    for &(command, action) in CUSTOM_BINDINGS {
+        if client.binding_code(c"GetDefault", action)?.is_none() {
+            continue;
+        }
+        let value = match client.binding_code(c"GetKey", action) {
+            Some(Some(code)) => client.button_name(code),
+            Some(None) => Some(String::new()),
+            None => None,
+        };
+        if let Some(value) = value {
+            bindings.insert(command.to_owned(), Value::String(value));
+        }
+    }
+    (!bindings.is_empty()).then_some(Value::Object(bindings))
+}
+
+/// A positive button code assigns a key, -1 clears it and None restores the action's default.
+pub(super) fn apply_binding(command: &str, key: Option<i32>) -> Option<()> {
+    let &(_, action) = CUSTOM_BINDINGS.iter().find(|(name, _)| *name == command)?;
+    let client = Client::open()?;
+    if client.gamemode()? != Gamemode::Panopticon {
+        return None;
+    }
+    let default = client.binding_code(c"GetDefault", action)??;
+    let code = key.unwrap_or(default);
+    if code != CLEARED_BINDING && !(1..=LAST_BUTTON_CODE).contains(&code) {
+        return None;
+    }
+    client.function(&[c"DANGAN", c"Binds", c"SetKey"], |client| {
+        client.string(action);
+        unsafe { (client.push_number)(client.state, f64::from(code)) };
+        client.call(2, 0)
+    })?;
+    let expected = (code != CLEARED_BINDING).then_some(code);
+    (client.binding_code(c"GetKey", action)? == expected).then_some(())
 }

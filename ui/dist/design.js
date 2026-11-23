@@ -225,6 +225,31 @@
         }
     }
 
+    function colorLuminance(rgb) {
+        return rgb.reduce((sum, channel, index) => {
+            const value = channel / 255;
+            return sum + (value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4) * [.2126, .7152, .0722][index];
+        }, 0);
+    }
+
+    function readableAccent(rgb, minimum) {
+        // Raise value before reducing saturation, so red controls stay red.
+        const peak = Math.max(...rgb);
+        const vivid = peak ? rgb.map((value) => Math.round(value * 255 / peak)) : [0, 0, 0];
+        let low = 0, high = 1;
+        const at = (amount) => amount <= 1
+            ? rgb.map((value, index) => Math.round(value + (vivid[index] - value) * amount))
+            : vivid.map((value) => Math.round(value + (255 - value) * (amount - 1)));
+        if (colorLuminance(rgb) >= minimum) return rgb;
+        if (colorLuminance(vivid) < minimum) { low = 1; high = 2; }
+        for (let step = 0; step < 12; step++) {
+            const middle = (low + high) / 2;
+            if (colorLuminance(at(middle)) < minimum) low = middle;
+            else high = middle;
+        }
+        return at(high);
+    }
+
     function setColor(scope, profile) {
         const accent = profile?.accent;
         if (!stroke.test(accent || '')) {
@@ -236,11 +261,14 @@
         const luminance = [r, g, b].map((c) => c / 255).map((c) => c <= .04045 ? c / 12.92 : ((c + .055) / 1.055) ** 2.4);
         const lightness = .2126 * luminance[0] + .7152 * luminance[1] + .0722 * luminance[2];
         const darkText = lightness > .179;
-        const accentText = 'color-mix(in srgb,' + accent + (darkText ? ' 68%' : ' 34%') + ', white)';
+        const websiteStyle = profile.builtinStyle === 'panopticon';
+        const accentText = websiteStyle
+            ? 'rgb(' + readableAccent([r, g, b], .24).join(', ') + ')'
+            : 'color-mix(in srgb,' + accent + (darkText ? ' 68%' : ' 34%') + ', white)';
         const websiteColors = profile.builtinStyle === 'panopticon' && accent.toLowerCase() === '#f0504f';
         // Keep thin controls visible against the dark Hub panels.
         const values = [
-            accent, websiteColors ? '#ff9c9a' : accentText, lightness >= .13 ? accent : accentText,
+            accent, websiteColors ? '#ff6656' : accentText, lightness >= .13 ? accent : accentText,
             accent + '1f', accent + '8c',
             websiteColors ? '#e64b51' : 'color-mix(in srgb,' + accent + ' 86%, ' + (darkText ? 'white' : 'black') + ')',
             websiteColors ? '#c13038' : 'color-mix(in srgb,' + accent + ' 85%, ' + (darkText ? 'black' : 'white') + ')',

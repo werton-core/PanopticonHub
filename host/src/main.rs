@@ -417,6 +417,9 @@ fn actor(
             continue;
         }
         let result: Answer = match channel {
+            "store" if args[0] == "set" && args[1] == hub_backend::identity::KEY
+                && update_game_active(&mut backend, busy.is_some()) =>
+                Err("Измените идентификатор после выхода из Garry’s Mod.".into()),
             "getAppVersion" => Ok(Some(json!(env!("CARGO_PKG_VERSION")))),
             "updateCurrentVersion" if args.as_array().is_some_and(Vec::is_empty) =>
                 Ok(Some(json!(updates::installed_version(&receipt)))),
