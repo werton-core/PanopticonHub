@@ -1,0 +1,190 @@
+@font-face {
+  font-family: 'Montserrat';
+  src: url('./assets/montserrat-v18-latin_cyrillic-600.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'Montserrat';
+  src: url('./assets/montserrat-v18-latin_cyrillic-700.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'Chakra Petch';
+  src: url('./assets/chakra-petch-700.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+html {
+  font-size: calc(100vh / 1080);
+}
+
+body {
+  color: #fffaef;
+  background: #0a0908;
+  background-image: linear-gradient(0deg, rgba(0, 0, 0, .83), rgba(0, 0, 0, .12) 60%), url('./panopticon/backdrops/academy-01.jpg');
+  background-position: center;
+  background-size: cover;
+  font-family: 'Montserrat', sans-serif;
+}
+
+.enter-screen {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.enter-screen__logo {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  left: -147rem;
+  width: 752rem;
+  height: 396rem;
+  object-fit: contain;
+}
+
+.tip {
+  position: absolute;
+  z-index: 2;
+  top: 710rem;
+  left: 80rem;
+  width: min(1184rem, calc(100% - 160rem));
+  text-shadow: 1rem 1rem 1.7rem rgba(0, 0, 0, 0.34);
+}
+
+.tip__title {
+  margin: 0 0 16rem;
+  color: #fffaef;
+  font-size: 28rem;
+  font-weight: 700;
+  line-height: 38rem;
+  text-transform: uppercase;
+}
+
+.tip__text {
+  margin: 0;
+  color: rgba(255, 250, 239, 0.74);
+  font-size: 26rem;
+  font-weight: 600;
+  line-height: 38rem;
+}
+
+.tip,
+.progress-panel__labels {
+  visibility: hidden;
+}
+
+.language-ready .tip,
+.language-ready .progress-panel__labels {
+  visibility: visible;
+}
+
+.progress-panel {
+  position: absolute;
+  z-index: 2;
+  right: 80rem;
+  bottom: 80rem;
+  left: 80rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  height: 76rem;
+  text-shadow: 1rem 1rem 1.7rem rgba(0, 0, 0, 0.34);
+}
+
+.progress-panel__labels {
+  display: flex;
+  gap: 24rem;
+  align-items: baseline;
+  justify-content: space-between;
+  min-height: 39rem;
+}
+
+.progress-panel__status {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: rgba(255, 250, 239, 0.74);
+  font-size: 24rem;
+  font-weight: 600;
+  line-height: 37rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.progress-panel__current,
+.progress-panel__of {
+  font-size: 30rem;
+  line-height: 37rem;
+}
+
+.progress-panel__current {
+  margin-left: 8rem;
+  color: #fffaef;
+}
+
+.progress-panel__of {
+  color: rgba(255, 250, 239, 0.74);
+}
+
+.progress-panel__labels strong {
+  flex-shrink: 0;
+  color: #fffaef;
+  font-family: 'Chakra Petch', sans-serif;
+  font-size: 30rem;
+  font-weight: 700;
+  line-height: 39rem;
+  text-transform: uppercase;
+}
+
+.progress-panel__track {
+  flex-shrink: 0;
+  width: 100%;
+  height: 15rem;
+  overflow: hidden;
+  background: rgba(255, 234, 192, 0.2);
+  border-radius: 12rem;
+}
+
+.progress-panel__track span {
+  display: block;
+  width: 0;
+  height: 100%;
+  background: #ffeac0;
+  border-radius: inherit;
+  transition: width 180ms ease-out;
+}
+
+.progress-panel__track--indeterminate span {
+  width: 23%;
+  animation: loading-indeterminate 2.1s ease-in-out infinite;
+  transition: none;
+}
+
+@keyframes loading-indeterminate {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(435%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress-panel__track span { transition: none; }
+  .progress-panel__track--indeterminate span { animation: none; opacity: .5; }
+}

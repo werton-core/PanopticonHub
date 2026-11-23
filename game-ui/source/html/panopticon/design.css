@@ -1,0 +1,266 @@
+.pt-design-backdrop {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    visibility: hidden;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+.pt-design-backdrop--ready,
+.pt-design-backdrop--stock { visibility: visible; }
+.pt-loading #root .pt-design-backdrop { visibility: hidden; }
+.pt-design-backdrop__media {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    filter: var(--pt-design-media-filter, none);
+}
+
+.pt-design-filter-menu .st-menu__bg {
+    filter: var(--pt-design-menu-filter);
+}
+
+/* У штатных настроек уже размыт исходник. Цветокоррекция не трогает шторку и элементы поверх него. */
+.pt-design-filter-menu .settings-page::before,
+.pt-design-filter-loading body::before,
+.pt-design-filter-loading body::after,
+.pt-design-stock-chooser,
+.pt-design-stock-chooser img {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    pointer-events: none;
+}
+
+.pt-design-filter-menu .settings-page::before {
+    background: url('./settings-background.webp') center / cover no-repeat;
+    filter: var(--pt-design-menu-filter);
+}
+
+.pt-design-filter-loading body::before {
+    background: url('./backdrops/academy-01.jpg') center / cover no-repeat;
+    filter: var(--pt-design-loading-filter);
+}
+
+.pt-design-filter-loading body::after {
+    background: linear-gradient(0deg, #000d, #0002 60%);
+    z-index: 0;
+}
+
+.pt-design-filter-loading .enter-screen { z-index: 1; }
+
+.pt-design-stock-chooser img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.server-browser .pt-design-stock-chooser img {
+    animation: pt-design-stock-slide 90s linear infinite;
+}
+
+.server-browser .pt-design-stock-chooser img:nth-child(2) { animation-delay: -60s; }
+.server-browser .pt-design-stock-chooser img:nth-child(3) { animation-delay: -30s; }
+
+.pt-design-backdrop--ready .pt-design-stock-chooser,
+body > .pt-design-backdrop .pt-design-stock-chooser img:not(:first-child) { visibility: hidden; }
+
+@keyframes pt-design-stock-slide {
+    0% { opacity: 1; transform: scale(1.03); }
+    32.22% { opacity: 1; }
+    33.33% { opacity: 0; transform: scale(1.10); }
+    98.89% { opacity: 0; transform: scale(1.03); }
+    100% { opacity: 1; transform: scale(1.03); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .server-browser .pt-design-stock-chooser img { animation: none; }
+    .server-browser .pt-design-stock-chooser img:not(:first-child) { display: none; }
+}
+
+.pt-design-backdrop--ready::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    background: linear-gradient(0deg, #000a, #0002 46%, #0004 72%, #0007);
+}
+
+/* Filter the media directly so CEF can blur both images and video over the native menu. */
+.server-browser > .pt-design-backdrop .pt-design-backdrop__media {
+    filter: var(--pt-design-media-filter, saturate(100%)) blur(8px);
+    transform: scale(1.05);
+}
+
+.settings-page > .pt-design-backdrop .pt-design-backdrop__media {
+    filter: var(--pt-design-media-filter, saturate(100%)) blur(35px);
+    transform: scale(1.16);
+}
+
+.server-browser > .pt-design-backdrop::after,
+.settings-page > .pt-design-backdrop::after {
+    content: none;
+}
+
+.enter-screen > .pt-design-backdrop--ready::after {
+    background: linear-gradient(0deg, #000d, #0002 60%);
+}
+
+body > .pt-design-backdrop--ready + #root { position: relative; }
+body > .pt-design-backdrop--ready + #root .browser-toolbar { background: #100c04a8; }
+
+.pt-design-logo .st-menu__logo,
+.pt-design-logo .server-browser__loader-logo,
+.pt-design-logo .enter-screen__logo { content: var(--pt-game-logo); }
+
+.pt-design-logo .st-menu__logo {
+    left: 40px;
+    width: 548px;
+    height: 216px;
+    object-position: left top;
+}
+
+.pt-design-logo .server-browser__loader-logo {
+    width: 206px;
+    height: 130px;
+}
+
+.pt-design-logo .enter-screen__logo {
+    top: 68rem;
+    width: min(520rem, calc(100% - 160rem));
+    height: 188rem;
+}
+
+.pt-intro__custom-logo { display: none; }
+.pt-design-logo .pt-intro--mark .pt-intro__custom-logo {
+    display: block;
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    background: #000;
+    pointer-events: none;
+}
+
+.pt-intro__custom-logo::before {
+    content: '';
+    position: absolute;
+    top: 14.9%;
+    left: 50%;
+    width: min(35vw, 51vh);
+    height: 14vh;
+    transform: translateX(-50%);
+    background: var(--pt-game-logo) center / contain no-repeat;
+}
+
+@media (max-aspect-ratio: 4/5) {
+    .pt-intro__custom-logo::before { width: 67vw; }
+}
+
+.pt-design-accent {
+    --pt-accent-wash: rgba(var(--pt-accent-text-rgb), .2);
+    --pt-accent-secondary: rgba(var(--pt-accent-pale-rgb), .78);
+    --pt-accent-border: rgba(var(--pt-accent-text-rgb), .48);
+    --pt-accent-inset-shadow: rgba(var(--pt-accent-text-rgb), .13);
+    --pt-accent-toolbar-hover: rgba(var(--pt-accent-text-rgb), .22);
+}
+
+.pt-design-accent .server-select__button:hover,
+.pt-design-accent .server-select__button:focus-visible {
+    color: var(--pt-accent-text);
+}
+
+.pt-design-accent .settings-page__details h3 {
+    color: rgb(var(--pt-accent-pale-rgb));
+}
+
+.pt-design-accent .settings-page__details p {
+    color: var(--pt-accent-secondary);
+}
+
+.pt-design-accent .progress-panel__track {
+    background: var(--pt-accent-wash);
+}
+
+.pt-design-accent .play-prompt:hover .play-prompt__label,
+.pt-design-accent .play-prompt:focus-visible .play-prompt__label,
+.pt-design-accent .setting-bind--capturing,
+.pt-design-accent .settings-page__back:hover > span:last-child,
+.pt-design-accent .settings-page__back:focus-visible > span:last-child { color: var(--pt-accent-text); }
+
+.pt-design-accent .glass-button:hover,
+.pt-design-accent .glass-button:focus-visible,
+.pt-design-accent .server-select__button:hover,
+.pt-design-accent .server-select__button:focus-visible,
+.pt-design-accent .pt-session-action:hover .pt-session-action__glyph,
+.pt-design-accent .pt-session-action:focus-visible .pt-session-action__glyph,
+.pt-design-accent .pt-language__toggle[aria-expanded=true],
+.pt-design-accent .setting-action:not(.setting-action--active):hover {
+    background: linear-gradient(var(--pt-accent-wash), var(--pt-accent-wash)), var(--menu-panel);
+}
+
+.pt-design-accent .pt-directory__group button[aria-pressed=true],
+.pt-design-accent .setting-action--active,
+.pt-design-accent .quit-modal__cancel,
+.pt-design-accent .quit-modal__cancel:hover {
+    color: var(--pt-accent-ink);
+    background: var(--pt-accent-fill, var(--pt-accent));
+    border-color: var(--pt-accent-fill, var(--pt-accent));
+}
+
+.pt-design-accent .pt-directory__group button:hover,
+.pt-design-accent .pt-directory__group button:focus-visible,
+.pt-design-accent .pt-session-action:focus-visible .pt-session-action__glyph {
+    box-shadow: inset 0 0 0 2px var(--pt-accent-text);
+}
+
+.pt-design-accent .menu-tabs__item::before {
+    background: linear-gradient(transparent, var(--pt-accent-text), transparent, var(--pt-accent-text), transparent);
+}
+.pt-design-accent .menu-tabs__item::after {
+    background: linear-gradient(90deg, transparent, var(--pt-accent-text), transparent);
+}
+
+.pt-design-accent .server-row__hover-wash {
+    background: linear-gradient(90deg, var(--pt-accent-wash), transparent);
+}
+
+.pt-design-accent .setting-row:hover::before {
+    background: var(--pt-accent-wash);
+}
+.pt-design-accent .setting-row--selected::before,
+.pt-design-accent .setting-row--selected:hover::before {
+    background: var(--pt-accent-wash);
+    box-shadow: inset 2px 0 var(--pt-accent-text);
+}
+
+.pt-design-accent .server-row__meter > span,
+.pt-design-accent .server-scrollbar__thumb::before,
+.pt-design-accent .settings-scrollbar__thumb,
+.pt-design-accent .setting-slider__fill,
+.pt-design-accent .setting-stepper__segments > .setting-stepper__segment--active,
+.pt-design-accent .progress-panel__track span { background: var(--pt-accent-text); }
+
+.pt-design-accent .pt-menu-music__range::-webkit-slider-runnable-track {
+    background: linear-gradient(to right,
+        var(--pt-accent-text) var(--pt-music-fill), var(--pt-accent-wash) var(--pt-music-fill));
+}
+.pt-design-accent .pt-menu-music__range::-webkit-slider-thumb { background: var(--pt-accent-text); }
+
+.pt-design-accent .browser-toolbar button:not(.browser-toolbar__close):hover,
+.pt-design-accent .browser-toolbar button:focus-visible,
+.pt-design-accent .browser-toolbar__address--editing { border-color: var(--pt-accent-text); }
+.pt-design-accent .browser-toolbar__loader {
+    background: var(--pt-accent-text);
+    box-shadow: 0 0 10px var(--pt-accent);
+}

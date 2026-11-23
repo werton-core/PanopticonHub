@@ -1,0 +1,17 @@
+[
+  {
+    "name": "Discord",
+    "url": "https://discord.gg/V69a6wYdVR",
+    "iconUrl": "./social/discord.svg"
+  },
+  {
+    "name": "Telegram",
+    "url": "https://t.me/HET_HOMEP",
+    "iconUrl": "./social/telegram.svg"
+  },
+  {
+    "name": "TikTok",
+    "url": "https://www.tiktok.com/@werton_core",
+    "iconUrl": "./social/tiktok.svg"
+  }
+]

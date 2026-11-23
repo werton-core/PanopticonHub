@@ -1,0 +1,90 @@
+.pt-language {
+    position: absolute;
+    z-index: 22;
+    left: 2.08%;
+    bottom: 7.4%;
+}
+
+.pt-language__toggle[aria-expanded=true] {
+    background: #312507b3;
+}
+
+.pt-language .glass-button:focus-visible {
+    box-shadow: inset 0 0 0 2px var(--pt-accent-text, rgb(var(--pt-accent-text-rgb, 255, 210, 131)));
+}
+
+.pt-language img {
+    width: 28px;
+    height: 22px;
+    object-fit: contain;
+    pointer-events: none;
+}
+
+.pt-language__toggle img {
+    width: 36px;
+    height: 27px;
+}
+
+.pt-language__panel {
+    position: absolute;
+    bottom: calc(100% + 12px);
+    left: 0;
+    padding: 12px;
+    border: 1px solid var(--menu-border);
+    border-radius: 20px;
+    background: linear-gradient(var(--menu-panel), var(--menu-panel)), #0f0802;
+    color: var(--menu-gold-muted);
+    box-shadow: inset 0 1px rgba(var(--pt-accent-text-rgb, 255, 234, 192), 0.07058824), 0 5px 18px #0000005e;
+    animation: pt-language-reveal 150ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.pt-language__label {
+    padding: 0 4px 10px;
+    font-size: 18px;
+    font-weight: 500;
+    line-height: 1.2;
+}
+
+.pt-language__grid {
+    display: grid;
+    grid-template-columns: repeat(6, 52px);
+    gap: 6px;
+}
+
+.pt-language__choice.glass-button {
+    width: 100%;
+    height: 42px;
+    border-radius: 12px;
+}
+
+.pt-language__choice img {
+    opacity: .8;
+    transition: opacity .3s ease-out;
+}
+
+.pt-language__choice:hover img,
+.pt-language__choice:focus-visible img,
+.pt-language__choice[aria-pressed=true] img { opacity: 1; }
+
+.pt-language__choice[aria-pressed=true]::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 6px;
+    right: 6px;
+    height: 2px;
+    border-radius: 4px;
+    background: linear-gradient(90deg, transparent, var(--pt-accent-text, rgb(var(--pt-accent-text-rgb, 255, 210, 131))), transparent);
+    pointer-events: none;
+}
+
+@keyframes pt-language-reveal {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .pt-language__panel { animation: none; }
+    .pt-language .glass-button,
+    .pt-language__choice img { transition: none; }
+}

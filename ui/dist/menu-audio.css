@@ -1,0 +1,96 @@
+.topbar > .pt-hub-menu-audio {
+    position: relative;
+    flex-shrink: 0;
+    pointer-events: auto;
+}
+
+.pt-hub-menu-audio__toggle,
+.pt-hub-menu-audio__toggle:hover {
+    color: var(--st-gold2);
+}
+
+.pt-hub-menu-audio.is-muted .pt-hub-menu-audio__toggle { color: var(--st-m); }
+
+.pt-hub-menu-audio__popover {
+    position: absolute;
+    inset: 100% 0 auto;
+    z-index: 1;
+    padding-top: 8px;
+    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-6px);
+    transition: opacity .15s, transform .15s, visibility 0s .15s;
+}
+
+.pt-hub-menu-audio__toggle:focus-visible + .pt-hub-menu-audio__popover,
+.pt-hub-menu-audio__popover:focus-within {
+    visibility: visible;
+    opacity: 1;
+    pointer-events: auto;
+    transform: none;
+    transition-delay: 0s;
+}
+
+@media (hover: hover) and (pointer: fine) {
+    .pt-hub-menu-audio:hover .pt-hub-menu-audio__popover {
+        visibility: visible;
+        opacity: 1;
+        pointer-events: auto;
+        transform: none;
+        transition-delay: 0s;
+    }
+}
+
+@media (hover: none) {
+    .pt-hub-menu-audio:focus-within .pt-hub-menu-audio__popover {
+        visibility: visible;
+        opacity: 1;
+        pointer-events: auto;
+        transform: none;
+        transition-delay: 0s;
+    }
+}
+
+.pt-hub-menu-audio__panel {
+    display: grid;
+    justify-items: center;
+    gap: 3px;
+    padding: 7px 0;
+    border: 1px solid var(--st-brg);
+    border-radius: 10px;
+    background: var(--st-panel);
+    color: var(--st-gold2);
+}
+
+.pt-hub-menu-audio.is-muted .pt-hub-menu-audio__panel {
+    opacity: .75;
+    filter: saturate(.15);
+}
+
+.pt-hub-menu-audio__slider {
+    position: relative;
+    width: 100%;
+    height: 102px;
+}
+
+.pt-hub-menu-audio__range.st-volume__range {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 92px;
+    height: 24px;
+    transform: translate(-50%, -50%) rotate(-90deg);
+}
+
+.pt-hub-menu-audio__range:disabled { cursor: default; }
+
+.pt-hub-menu-audio__percent {
+    font-size: 11px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .pt-hub-menu-audio__popover { transition: none; }
+}

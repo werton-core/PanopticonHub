@@ -1,0 +1,80 @@
+{
+  "shinri": [
+    3528522367,
+    3137837393,
+    3600114514,
+    2560009684,
+    2560012664,
+    3600116031,
+    2532822854,
+    2532517900,
+    2534082994,
+    3538145447,
+    3543449427,
+    2562456244,
+    3648498163,
+    1501107915,
+    3755178074,
+    3533289875,
+    3741874650,
+    2560008589,
+    2553337786,
+    2557045777,
+    2566487778,
+    2566489438,
+    2552662220,
+    1886587791,
+    3834135948
+  ],
+  "panopticon": [
+    {
+      "id": 3741538605,
+      "title": "Weapons CUSTOM @ PANOPTICON",
+      "author": "Werton",
+      "bytes": 17468590,
+      "preview": "/workshop/3741538605.webp"
+    },
+    {
+      "id": 3741794023,
+      "title": "Sprites @ PANOPTICON",
+      "author": "Werton",
+      "bytes": 363313049,
+      "preview": "/workshop/3741794023.webp"
+    },
+    {
+      "id": 3741796175,
+      "title": "PlayerModels DLC @ PANOPTICON",
+      "author": "Werton",
+      "bytes": 1484028798,
+      "preview": "/workshop/3741796175.webp"
+    },
+    {
+      "id": 3743443693,
+      "title": "UI @ PANOPTICON",
+      "author": "Werton",
+      "bytes": 96100927,
+      "preview": "/workshop/3743443693.webp"
+    },
+    {
+      "id": 3707936450,
+      "title": "pointshop catears",
+      "author": "AppleJeb",
+      "bytes": null,
+      "preview": null
+    },
+    {
+      "id": 3802600859,
+      "title": "ST Lobby3 Content @ PANOPTICON",
+      "author": "Werton",
+      "bytes": 57248801,
+      "preview": "/workshop/3802600859.webp"
+    },
+    {
+      "id": 3803513482,
+      "title": "The Sims 2 Mega Model pack @ PANOPTICON\"",
+      "author": "Werton",
+      "bytes": 1383745877,
+      "preview": "/workshop/3803513482.webp"
+    }
+  ]
+}

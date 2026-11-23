@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' asset: data: blob:; script-src 'self' asset:; style-src 'self' 'unsafe-inline' asset:; connect-src 'none'; object-src 'none'">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Panopticon Trial</title>
+  <script src="./panopticon/entry.js"></script>
+  <script defer src="./panopticon/design-profile.js"></script>
+  <script defer src="./panopticon/design.js"></script>
+  <script defer src="./panopticon/intro.js"></script>
+  <script defer src="./panopticon/language.js"></script>
+  <script defer src="./assets/menu.js"></script>
+  <link rel="stylesheet" href="./assets/style.css">
+  <link rel="stylesheet" href="./panopticon/directory.css">
+  <link rel="stylesheet" href="./panopticon/intro.css">
+  <link rel="stylesheet" href="./panopticon/language.css">
+  <link rel="stylesheet" href="./panopticon/design.css">
+</head>
+<body>
+  <div id="root"></div>  <section id="pt-intro" hidden>
+    <div class="pt-intro__content">
+      <video class="pt-intro__video" src="./panopticon/intro.webm" preload="auto" playsinline aria-hidden="true" disablepictureinpicture></video>
+      <img class="pt-intro__fallback" src="./panopticon/intro-panopticon.png" alt="" hidden>
+      <div class="pt-intro__custom-logo" aria-hidden="true"></div>
+      <div class="pt-intro__message" hidden>
+        <h1></h1>
+        <div class="pt-intro__words">
+          <div class="pt-intro__copy"></div>
+          <p class="pt-intro__age"></p>
+        </div>
+      </div>
+    </div>
+    <div class="pt-intro__curtain" aria-hidden="true"></div>
+    <button type="button" class="pt-intro__hit" aria-label="Пропустить вступление"></button>
+  </section>
+
+</body>
+</html>

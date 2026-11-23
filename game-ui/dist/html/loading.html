@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Panopticon Trial</title>
+  <script defer src="./panopticon/design-profile.js"></script>
+  <script defer src="./panopticon/design.js"></script>
+  <link rel="stylesheet" href="./loading.css" />
+  <link rel="stylesheet" href="./panopticon/design.css" />
+</head>
+<body>
+  <main class="enter-screen">
+    <div class="pt-design-backdrop" data-pt-background="gameLoadingBackground" aria-hidden="true"></div>
+    <img class="enter-screen__logo" src="./assets/logo.png" alt="Panopticon Trial" />
+
+    <section class="tip">
+      <h1 class="tip__title" id="tip-title"></h1>
+      <p class="tip__text" id="tip-text"></p>
+    </section>
+
+    <section class="progress-panel">
+      <div class="progress-panel__labels">
+        <p class="progress-panel__status">
+          <span id="loading-status"></span><span class="progress-panel__figures" id="loading-figures" hidden><span class="progress-panel__current" id="loading-current"></span><span class="progress-panel__of" id="loading-of"></span></span><span id="loading-detail"></span>
+        </p>
+        <strong id="loading-percent"></strong>
+      </div>
+      <div class="progress-panel__track" id="loading-track" role="progressbar" aria-label="Loading" aria-valuemin="0" aria-valuemax="100">
+        <span id="loading-progress"></span>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    function STLoadingProgress(next) {
+      document.getElementById('tip-title').textContent = next.tipTitle || '';
+      document.getElementById('tip-text').textContent = next.tipText || '';
+      document.getElementById('loading-status').textContent = next.label;
+      document.getElementById('loading-detail').textContent = next.detail ? ' · ' + next.detail : '';
+      var figures = document.getElementById('loading-figures');
+      var known = typeof next.percent === 'number';
+      figures.hidden = !known;
+      if (known) {
+        document.getElementById('loading-current').textContent = next.current;
+        document.getElementById('loading-of').textContent = '/' + next.total;
+      }
+      var track = document.getElementById('loading-track');
+      var percent = document.getElementById('loading-percent');
+      var completed = known ? Math.floor(next.percent) : 0;
+      track.setAttribute('aria-label', next.label);
+      track.classList.toggle('progress-panel__track--indeterminate', !known);
+      if (known) track.setAttribute('aria-valuenow', completed);
+      else track.removeAttribute('aria-valuenow');
+      percent.textContent = known ? completed + '%' : '';
+      document.getElementById('loading-progress').style.width = known ? next.percent + '%' : '';
+      if (next.lang) document.documentElement.lang = next.lang;
+      document.body.classList.add('language-ready');
+    }
+  </script>
+  <script src="./panopticon/loading-bridge.js"></script>
+</body>
+</html>

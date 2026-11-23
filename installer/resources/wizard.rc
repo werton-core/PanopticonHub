@@ -1,0 +1,12 @@
+// The six controls of the two full-width MUI pages use the dialog units recovered
+// from nsDialogs::CreateControl. The original 164 x 314 bitmap is scaled at runtime.
+401 BITMAP "resources/modern-wizard.bmp"
+201 DIALOGEX 0, 0, 331, 193
+STYLE 0x40000448
+FONT 8, "MS Shell Dlg", 0, 0, 1
+BEGIN
+    CONTROL "", 2000, "Static", 0x5400010E, 0, 0, 109, 193
+    CONTROL "", 2001, "Static", 0x54000100, 120, 10, 195, 28, 0x20
+    CONTROL "", 2002, "Static", 0x54000100, 120, 45, 195, 130, 0x20
+    CONTROL "", 2003, "Button", 0x54012C03, 120, 90, 195, 10
+END
