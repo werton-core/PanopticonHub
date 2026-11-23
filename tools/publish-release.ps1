@@ -22,18 +22,23 @@ if ($LASTEXITCODE -ne 0 -or $payload -notmatch 'fixture=false') {
     throw 'Установщик не содержит продуктивный пакет.'
 }
 
-$draftJson = & gh api "repos/$repo/releases/tags/$tag" 2>$null
-if ($LASTEXITCODE -ne 0) {
+function Read-Release {
+    $query = '.[] | select(.tag_name == "{0}")' -f $tag
+    $releaseJson = & gh api "repos/$repo/releases?per_page=100" --paginate --jq $query
+    if ($LASTEXITCODE -ne 0) { throw "Не удалось прочитать релизы $repo." }
+    if ($releaseJson) { $releaseJson | ConvertFrom-Json }
+}
+
+$release = Read-Release
+if (!$release) {
     $notice = Join-Path $installer.DirectoryName 'ThirdPartyNotices.zip'
     $files = (Join-Path $PSScriptRoot '../THIRD_PARTY.md'), (Join-Path $PSScriptRoot '../licenses')
     Compress-Archive -LiteralPath $files -DestinationPath $notice -Force
     & gh release create $tag $installer.FullName $notice --repo $repo --title "Panopticon Hub $version" --notes-file $notes.FullName --verify-tag --draft
     if ($LASTEXITCODE -ne 0) { throw "Не удалось создать черновик $tag." }
-    $draftJson = & gh api "repos/$repo/releases/tags/$tag"
-    if ($LASTEXITCODE -ne 0) { throw "Не удалось прочитать черновик $tag." }
+    $release = Read-Release
+    if (!$release) { throw "Не удалось прочитать черновик $tag." }
 }
-
-$release = $draftJson | ConvertFrom-Json
 $assets = @($release.assets | Where-Object { $_.name -ceq $assetName -and $_.state -ceq 'uploaded' })
 $notices = @($release.assets | Where-Object { $_.name -ceq 'ThirdPartyNotices.zip' -and $_.state -ceq 'uploaded' })
 if ($release.prerelease -or $assets.Count -ne 1 -or $notices.Count -ne 1 -or $assets[0].size -ne $installer.Length -or

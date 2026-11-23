@@ -21,7 +21,7 @@ Hub launches the installed 64-bit game through Steam. The custom menu applies fo
 
 Hub checks GitHub Releases and asks before installing by default. In **Settings → Updates**, choose **Ask**, **Install automatically**, or **Check manually**. **Check for updates** works in every mode. Hub verifies the downloaded installer against the SHA-256 digest published by GitHub before running it. Installation waits until Garry’s Mod closes. An all-users installation may require Windows administrator approval.
 
-For a manual update, close Garry’s Mod and Hub, then run the latest installer over your existing installation. Your settings and appearance profile carry over. [Browse releases](https://github.com/werton-core/PanopticonHub/releases).
+Version 0.2.36 is the first to include the updater. If you use an earlier version, run the installer once to enable future update checks. For a manual update, close Garry’s Mod and Hub, then run the latest installer over your existing installation. Your settings and appearance profile carry over. [Browse releases](https://github.com/werton-core/PanopticonHub/releases).
 
 ### Customize
 
@@ -33,7 +33,7 @@ Hub polls Panopticon servers for player counts, reads public Shinri Trial server
 
 ### Build
 
-Use PowerShell on x64 Windows with Rust’s `x86_64-pc-windows-msvc` toolchain, the MSVC build tools, and the Windows SDK. The full build requires the launcher and in-game UI bundles in `ui/dist` and `game-ui/dist`, along with the media and Windows resources referenced by the build.
+Use PowerShell on x64 Windows with Rust’s `x86_64-pc-windows-msvc` toolchain, the MSVC build tools, and the Windows SDK. The repository includes the editable Rust, Lua and customization code, plus the inherited interface bundles used at build time in `ui/dist` and `game-ui/dist`.
 
 ```powershell
 .\tools\build-host.ps1
@@ -42,7 +42,7 @@ Use PowerShell on x64 Windows with Rust’s `x86_64-pc-windows-msvc` toolchain, 
 
 The first command builds `target/release/PanopticonHub.exe`. The second builds the host, game module, uninstaller, and installer, then writes `dist/PanopticonHubSetup.exe` and prints its SHA-256.
 
-For a new release, push a matching version tag such as `v0.2.36`, then run `.\tools\publish-release.ps1 -NotesFile <release-notes.md>` with an authenticated GitHub CLI. The script verifies the installer uploaded to the draft before publishing it. To release only a setup change, keep the host version and pass its existing matching EXE to `installer/build-setup.ps1` with `-HostExe`. Setup leaves installed binaries in place when their SHA-256 matches the payload.
+For a new release, bump the setup version in `installer/Cargo.toml`, update `Cargo.lock`, and push a matching version tag such as `v0.2.36`, then run `.\tools\publish-release.ps1 -NotesFile <release-notes.md>` with an authenticated GitHub CLI. The script verifies the installer uploaded to the draft before publishing it. To release only a setup change, keep the host version and pass its existing matching EXE to `installer/build-setup.ps1` with `-HostExe`. Setup leaves installed binaries in place when their SHA-256 matches the payload.
 
 ### Credits
 
@@ -79,7 +79,7 @@ Hub запускает установленный 64-битный Garry’s Mod 
 
 Перед запуском установщика Hub сверяет SHA-256 файла с хешем, опубликованным GitHub. Установка откладывается до выхода из Garry’s Mod. Windows может запросить повышение прав, если Hub установлен для всех пользователей.
 
-Чтобы обновиться вручную, закройте игру и Hub, скачайте новый `PanopticonHubSetup.exe` и установите поверх текущей версии в тот же каталог. Настройки и профиль оформления сохраняются. [Все релизы](https://github.com/werton-core/PanopticonHub/releases).
+Обновления из приложения доступны начиная с 0.2.36. Если у вас версия ниже, один раз запустите новый установщик. Чтобы обновиться вручную, закройте игру и Hub, скачайте новый `PanopticonHubSetup.exe` и установите поверх текущей версии в тот же каталог. Настройки и профиль оформления сохраняются. [Все релизы](https://github.com/werton-core/PanopticonHub/releases).
 
 ### Оформление
 
@@ -95,7 +95,7 @@ Hub опрашивает серверы Panopticon для счётчиков о�
 
 ### Сборка
 
-Для сборки нужны 64-битная Windows, PowerShell, Rust с целевой платформой `x86_64-pc-windows-msvc`, инструменты сборки MSVC и Windows SDK. Полная сборка использует пакеты интерфейсов из `ui/dist` и `game-ui/dist`, а также медиа и ресурсы Windows, указанные в коде сборки.
+Для сборки нужны 64-битная Windows, PowerShell, Rust с целевой платформой `x86_64-pc-windows-msvc`, инструменты сборки MSVC и Windows SDK. В репозитории есть редактируемый код Rust, Lua и скрипты оформления. Сборка также использует унаследованные пакеты интерфейсов из `ui/dist` и `game-ui/dist`.
 
 Из корня проекта выполните нужную команду.
 
@@ -106,7 +106,7 @@ Hub опрашивает серверы Panopticon для счётчиков о�
 
 Первая команда собирает лаунчер в `target/release/PanopticonHub.exe`. Вторая собирает лаунчер, модуль игры, деинсталлятор и установщик. Результат сохраняется в `dist/PanopticonHubSetup.exe`. Сценарий выводит его SHA-256.
 
-Чтобы выпустить обновление, отправьте в репозиторий тег версии, например `v0.2.36`, и выполните `.\tools\publish-release.ps1 -NotesFile <release-notes.md>` с авторизованным GitHub CLI. Скрипт проверит загруженный установщик в черновике релиза и опубликует его. Если изменился только установщик, сохраните версию лаунчера и передайте готовый EXE соответствующей версии через `-HostExe` в `installer/build-setup.ps1`. Установщик сохраняет установленные файлы, если их SHA-256 совпадает с файлами из пакета.
+Для выпуска обновления поднимите версию в `installer/Cargo.toml`, обновите `Cargo.lock` и отправьте в репозиторий тег, например `v0.2.36`, и выполните `.\tools\publish-release.ps1 -NotesFile <release-notes.md>` с авторизованным GitHub CLI. Скрипт проверит загруженный установщик в черновике релиза и опубликует его. Если изменился только установщик, сохраните версию лаунчера и передайте готовый EXE соответствующей версии через `-HostExe` в `installer/build-setup.ps1`. Установщик сохраняет установленные файлы, если их SHA-256 совпадает с файлами из пакета.
 
 ### Авторы и материалы
 
