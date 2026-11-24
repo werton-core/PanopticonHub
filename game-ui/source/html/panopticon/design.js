@@ -151,6 +151,100 @@
         return !!backgroundUrl(key) || (key === 'gameBrowserBackground' && !!chooserFilter);
     }
 
+    var gameWindowVisible;
+
+    function mediaVisible() {
+        return gameWindowVisible === undefined ? !document.hidden : gameWindowVisible;
+    }
+
+    window.PTHubGameMediaWake = function (visible, forceWake) {
+        if (typeof visible !== 'boolean' || (gameWindowVisible === visible && !(visible && forceWake))) return;
+        gameWindowVisible = visible;
+        document.dispatchEvent(new CustomEvent('pt-game-media-visibility', { detail: visible && !!forceWake }));
+    };
+
+    function watchMediaVisibility(onChange) {
+        var visible = mediaVisible();
+        function visibilityChanged(event) {
+            var next = mediaVisible();
+            var forcedWake = next && event.type === 'pt-game-media-visibility' && event.detail;
+            if (next === visible && !forcedWake) return;
+            visible = next;
+            onChange(visible, true);
+        }
+        function wake() {
+            if (visible) onChange(true, false);
+        }
+        document.addEventListener('visibilitychange', visibilityChanged);
+        document.addEventListener('pt-game-media-visibility', visibilityChanged);
+        window.addEventListener('focus', wake);
+        window.addEventListener('pageshow', wake);
+        return function () {
+            document.removeEventListener('visibilitychange', visibilityChanged);
+            document.removeEventListener('pt-game-media-visibility', visibilityChanged);
+            window.removeEventListener('focus', wake);
+            window.removeEventListener('pageshow', wake);
+        };
+    }
+
+    function watchLoopVideo(video, canPlay, onFailure) {
+        var stopped = false;
+        var suspended = false;
+        var pending;
+
+        function updatePlayback(refreshFrame) {
+            if (stopped) return;
+            if (!mediaVisible() || !canPlay()) {
+                pending = undefined;
+                suspended = true;
+                if (!video.paused) video.pause();
+                return;
+            }
+            if (refreshFrame || suspended) {
+                suspended = false;
+                // CEF can retain the last texture when its window stops presenting frames.
+                if (video.readyState >= HTMLMediaElement.HAVE_METADATA && video.currentTime > 0 && !video.seeking) {
+                    video.currentTime = video.currentTime;
+                }
+            }
+            if (!video.paused || pending) return;
+            var attempt = video.play();
+            pending = attempt;
+            attempt.then(function () {
+                if (pending === attempt) pending = undefined;
+            }, function (error) {
+                if (pending !== attempt) return;
+                pending = undefined;
+                if (error.name === 'NotSupportedError') onFailure();
+            });
+        }
+
+        function retry() { updatePlayback(false); }
+        function failed() {
+            if (video.error && video.error.code !== MediaError.MEDIA_ERR_ABORTED) onFailure();
+        }
+        var unwatch = watchMediaVisibility(function (visible, transitioned) {
+            if (visible && transitioned && pending) {
+                pending = undefined;
+                video.pause();
+            }
+            updatePlayback(visible);
+        });
+        window.addEventListener('pointerdown', retry);
+        video.addEventListener('error', failed);
+        retry();
+        var stop = function () {
+            stopped = true;
+            pending = undefined;
+            unwatch();
+            window.removeEventListener('pointerdown', retry);
+            video.removeEventListener('error', failed);
+            video.pause();
+        };
+        stop.updatePlayback = retry;
+        return stop;
+    }
+
     function mountBackground(container, key, onReady, canPlay) {
         var url = backgroundUrl(key);
         var carousel = key === 'gameBrowserBackground' && chooserFilter && stockChooser(container);
@@ -168,6 +262,7 @@
         var media = document.createElement(isVideo ? 'video' : 'img');
         var disposed = false;
         var ready = false;
+        var playback;
         media.className = 'pt-design-backdrop__media';
         var filter = backgroundFilter(key);
         if (filter) media.style.setProperty('--pt-design-media-filter', filter);
@@ -182,9 +277,8 @@
         function removeCustom() {
             if (disposed) return;
             disposed = true;
-            document.removeEventListener('visibilitychange', updatePlayback);
             if (isVideo) {
-                media.pause();
+                if (playback) playback();
                 media.removeAttribute('src');
                 media.load();
             }
@@ -198,38 +292,28 @@
             if (onReady) onReady(false);
         }
 
-        function updatePlayback() {
-            if (disposed || !isVideo) return;
-            if (document.hidden || (canPlay && !canPlay())) media.pause();
-            else media.play().catch(function (error) {
-                if (error.name !== 'AbortError') fallback();
-            });
-        }
-
-        media.addEventListener('error', fallback, { once: true });
         if (isVideo) {
             media.loop = true;
             media.muted = true;
             media.defaultMuted = true;
             media.playsInline = true;
             media.disablePictureInPicture = true;
-            media.addEventListener('playing', function () {
-                if (media.videoWidth) show();
-                else fallback();
-            }, { once: true });
-            document.addEventListener('visibilitychange', updatePlayback);
+            function showDecodedFrame() { if (media.videoWidth) show(); }
+            media.addEventListener('loadeddata', showDecodedFrame, { once: true });
+            media.addEventListener('playing', showDecodedFrame, { once: true });
         } else {
             media.alt = '';
             media.addEventListener('load', show, { once: true });
+            media.addEventListener('error', fallback, { once: true });
         }
         container.appendChild(media);
         media.src = url;
-        if (isVideo) updatePlayback();
+        if (isVideo) playback = watchLoopVideo(media, canPlay || function () { return true; }, fallback);
         var unmount = function () {
             removeCustom();
             removeStock();
         };
-        unmount.updatePlayback = updatePlayback;
+        if (playback) unmount.updatePlayback = playback.updatePlayback;
         return unmount;
     }
 
@@ -253,6 +337,9 @@
         loadingMusicVolume: loadingVolume / 100,
         hasBackground: hasBackground,
         mountBackground: mountBackground,
+        mediaVisible: mediaVisible,
+        watchMediaVisibility: watchMediaVisibility,
+        watchLoopVideo: watchLoopVideo,
         accentIcon: accentIcon
     };
 

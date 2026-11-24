@@ -28,14 +28,14 @@ use tao::{
     dpi::LogicalSize,
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy},
-    platform::windows::WindowBuilderExtWindows,
+    platform::windows::{WindowBuilderExtWindows, WindowExtWindows},
     window::{Window, WindowBuilder},
 };
 use tray_icon::{
     menu::{Menu, MenuEvent, MenuItem},
-    MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent,
+    MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent,
 };
-use wry::{NewWindowResponse, WebContext, WebView, WebViewBuilder, WebViewBuilderExtWindows};
+use wry::{NewWindowResponse, WebContext, WebView, WebViewBuilder, WebViewBuilderExtWindows, WebViewExtWindows};
 
 const ORIGIN: &str = "https://panopticon.localhost";
 type Answer = Result<Option<Value>, String>;
@@ -105,6 +105,7 @@ enum Ui {
 enum Work {
     Ipc(Value),
     DesignFile(u64, DesignDialog, Option<PathBuf>),
+    DiscardDesignDraft,
     Visible(bool),
     Pid(Option<u32>),
     Progress(Value),
@@ -352,6 +353,10 @@ fn actor(
                 send_ui(&proxy, Ui::Push(answer(id, dialog.finish(path))));
                 continue;
             }
+            Work::DiscardDesignDraft => {
+                let _ = design::update_draft(Vec::new());
+                continue;
+            }
             Work::Visible(v) => {
                 backend.set_window_visible(v);
                 continue;
@@ -467,6 +472,12 @@ fn actor(
             }
             "designLoad" if args.as_array().is_some_and(Vec::is_empty) =>
                 design::load().map(|profile| Some(json!(profile))),
+            "designDraft" if args.as_array().is_some_and(|args| args.len() == 1) => {
+                serde_json::from_value::<Vec<String>>(args[0].clone())
+                    .map_err(|_| "Некорректные файлы черновика оформления.".into())
+                    .and_then(design::update_draft)
+                    .map(|()| None)
+            }
             "designStyles" if args.as_array().is_some_and(Vec::is_empty) => {
                 initial_style.map_or(Ok(false), design::needs_initial_style)
                     .map(|pending| Some(json!({"pending": pending, "themes": design::builtin_styles()})))
@@ -549,6 +560,8 @@ fn actor(
                         .invoke("store", &json!(["get", "returnToHub"]))?
                         .and_then(|v| v.as_bool())
                         .unwrap_or(true);
+                    let skip_loading_screen = backend.invoke("store", &json!(["get", "skipLoadingScreen"]))?
+                        == Some(json!(true));
                     let filter = backend.invoke("store", &json!(["get", "workshopFilter"]))? != Some(json!(false));
                     let panopticon_enabled = backend.invoke("store", &json!(["get", "workshopPanopticon"]))? != Some(json!(false));
                     let setup = backend.invoke("store", &json!(["get", "workshopOnboarding"]))?;
@@ -574,7 +587,7 @@ fn actor(
                             if stopping.load(Ordering::Acquire) {
                                 return Err("LAUNCH_CANCELLED".into());
                             }
-                            game::start(&req, &cancel, plan)
+                            game::start(&req, &cancel, plan, skip_loading_screen)
                         })();
                         send_ui(&p, Ui::Game(id, result, minimize, restore));
                     });
@@ -621,7 +634,6 @@ fn actor(
 fn window_action(
     action: Action,
     win: &Window,
-    tx: &mpsc::Sender<Work>,
     control: &mut ControlFlow,
 ) -> Answer {
     match action {
@@ -636,10 +648,9 @@ fn window_action(
             win.drag_window().map_err(|err| err.to_string())?;
         }
         Action::Window {
-            command: WindowCommand::Hide,
+            command: WindowCommand::Minimize,
         } => {
-            let _ = tx.send(Work::Visible(false));
-            win.set_visible(false);
+            win.set_minimized(true);
         }
         Action::Window {
             command: WindowCommand::Show,
@@ -647,7 +658,6 @@ fn window_action(
             win.set_visible(true);
             win.set_minimized(false);
             win.set_focus();
-            let _ = tx.send(Work::Visible(true));
         }
         Action::OpenExternal { url } => shell::open(OsStr::new(&url))?,
         Action::OpenPath { path } => {
@@ -709,6 +719,7 @@ fn run_window(
     web: &mut Option<WebView>,
     proxy: &EventLoopProxy<Ui>,
     tx: &mpsc::Sender<Work>,
+    tray: &TrayIcon,
 ) {
     if show {
         if web.is_none() {
@@ -723,11 +734,39 @@ fn run_window(
         win.set_visible(true);
         win.set_minimized(false);
         win.set_focus();
+        let _ = tray.set_visible(false);
     } else {
+        if tray.set_visible(true).is_err() {
+            win.set_minimized(true);
+            return;
+        }
         win.set_visible(false);
-        web.take();
+        if web.take().is_some() {
+            let _ = tx.send(Work::DiscardDesignDraft);
+        }
     }
-    let _ = tx.send(Work::Visible(show));
+}
+
+fn sync_window_visibility(
+    win: &Window,
+    web: Option<&WebView>,
+    previous: &mut Option<bool>,
+    tx: &mpsc::Sender<Work>,
+) {
+    let visible = win.is_visible() && !win.is_minimized();
+    if *previous == Some(visible) {
+        return;
+    }
+    if let Some(view) = web {
+        let controller = view.controller();
+        let _ = unsafe { controller.SetIsVisible(visible) };
+        if visible {
+            let _ = unsafe { controller.NotifyParentWindowPositionChanged() };
+            win.request_redraw();
+        }
+    }
+    *previous = Some(visible);
+    let _ = tx.send(Work::Visible(visible));
 }
 fn run() -> Result<(), String> {
     let _lock = match shell::Instance::acquire()? {
@@ -737,6 +776,7 @@ fn run() -> Result<(), String> {
             return Ok(());
         }
     };
+    let _ = design::update_draft(Vec::new());
     assets::start();
     let profile = design::load().unwrap_or_default();
     let appearance = identity::Identity::from_profile(&profile);
@@ -759,9 +799,12 @@ fn run() -> Result<(), String> {
         .with_window_icon(appearance.window_icon())
         .with_taskbar_icon(appearance.window_icon())
         .with_decorations(false)
+        .with_undecorated_shadow(false)
         .with_resizable(false)
         .build(&ev)
         .map_err(|e| e.to_string())?;
+    let native_corners = shell::round_window_corners(win.hwnd());
+    let mut corner_layout = None;
     let _ = appearance.update_taskbar(&win);
     let mut web = Some(open_web(&win, &proxy)?);
     let menu = Menu::new();
@@ -776,6 +819,7 @@ fn run() -> Result<(), String> {
         .with_menu(Box::new(menu))
         .build()
         .map_err(|e| e.to_string())?;
+    tray.set_visible(false).map_err(|e| e.to_string())?;
     let p = proxy.clone();
     MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
         send_ui(
@@ -812,13 +856,14 @@ fn run() -> Result<(), String> {
         }
     });
     let mut active_game: Option<bool> = None;
-    let _ = tx.send(Work::Visible(true));
+    let mut visible = None;
+    sync_window_visibility(&win, web.as_ref(), &mut visible, &tx);
     ev.run(move|event,_,control|{
         let _keep=(&tray,&_lock);*control=ControlFlow::Wait;
         match event{
             Event::UserEvent(Ui::Ipc(v))=>{let _=tx.send(Work::Ipc(v));}
             Event::UserEvent(Ui::Push(v))=>{if let Some(view)=&web {dispatch(view,&v)}}
-            Event::UserEvent(Ui::Show)=>{run_window(true,&win,&mut web,&proxy,&tx);}
+            Event::UserEvent(Ui::Show)=>{run_window(true,&win,&mut web,&proxy,&tx,&tray);}
             Event::UserEvent(Ui::Quit)|Event::WindowEvent{event:WindowEvent::CloseRequested,..}=>*control=ControlFlow::Exit,
             Event::UserEvent(Ui::Pick(id,default))=>{
                 let mut picker=rfd::FileDialog::new().set_title("Выберите каталог").set_parent(&win);
@@ -837,12 +882,8 @@ fn run() -> Result<(), String> {
                 }
             }
             Event::UserEvent(Ui::Act(id,a))=>{
-                if matches!(a,Action::Window{command:WindowCommand::Hide}) && active_game.is_some(){
-                    run_window(false,&win,&mut web,&proxy,&tx);
-                } else {
-                    let r=window_action(a,&win,&tx,control);
-                    if let (Some(id),Some(view))=(id,&web){dispatch(view,&answer(id,r));}
-                }
+                let r=window_action(a,&win,control);
+                if let (Some(id),Some(view))=(id,&web){dispatch(view,&answer(id,r));}
             }
             Event::UserEvent(Ui::Progress(v))=>{let _=tx.send(Work::Progress(v));}
             Event::UserEvent(Ui::WorkshopPrepared)=>{let _=tx.send(Work::WorkshopPrepared);}
@@ -856,7 +897,7 @@ fn run() -> Result<(), String> {
                             active_game=Some(restore);
                             let p=proxy.clone();
                             thread::spawn(move||{let result=child.wait();send_ui(&p,Ui::GameClosed(result));});
-                            if minimize { run_window(false,&win,&mut web,&proxy,&tx); }
+                            if minimize { run_window(false,&win,&mut web,&proxy,&tx,&tray); }
                         }
                     }
                     Err(e)=>if let Some(view)=&web {dispatch(view,&answer(id,Err(e)));}
@@ -864,13 +905,23 @@ fn run() -> Result<(), String> {
             }
             Event::UserEvent(Ui::GameClosed(result))=>{
                 let _=tx.send(Work::Pid(None));
-                if active_game.take()==Some(true) {run_window(true,&win,&mut web,&proxy,&tx);}
+                if active_game.take()==Some(true) {run_window(true,&win,&mut web,&proxy,&tx,&tray);}
                 if let Err(error)=result {shell::error(&error);}
             }
             Event::WindowEvent{event:WindowEvent::Focused(true),..} if web.is_none() && win.is_visible()=>{
-                run_window(true,&win,&mut web,&proxy,&tx);
+                run_window(true,&win,&mut web,&proxy,&tx,&tray);
             }
-            Event::WindowEvent{event:WindowEvent::Resized(_),..}=>{let _=tx.send(Work::Visible(!win.is_minimized() && win.is_visible()));}
+            Event::MainEventsCleared=>{
+                sync_window_visibility(&win,web.as_ref(),&mut visible,&tx);
+                if !native_corners && visible == Some(true) {
+                    let size = win.inner_size();
+                    let layout = (size, win.scale_factor(), win.is_maximized());
+                    if corner_layout != Some(layout) && size.width > 0 && size.height > 0 {
+                        shell::clip_window_corners(win.hwnd(), size.width, size.height, layout.1, layout.2);
+                        corner_layout = Some(layout);
+                    }
+                }
+            }
             Event::LoopDestroyed => {
                 identity::Identity::clear_taskbar(&win);
                 quit.store(true, Ordering::Release);

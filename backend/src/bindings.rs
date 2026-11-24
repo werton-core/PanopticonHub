@@ -98,6 +98,10 @@ fn defaults(cfg: &Path) -> Result<Vec<u8>, String> {
         .ok_or("Не найден штатный config_default.cfg.".into())
 }
 
+pub fn engine_action(command: &str) -> bool {
+    COMMANDS.contains(&command)
+}
+
 pub fn reset(cfg: &Path) -> Result<(), String> {
     defaults(cfg)?;
     write(&cfg.join(QUEUE), b"[true,{}]")

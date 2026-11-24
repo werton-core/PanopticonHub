@@ -1554,7 +1554,7 @@ dependencies = [
 
 [[package]]
 name = "panopticon-hub"
-version = "0.2.41"
+version = "0.2.46"
 dependencies = [
  "crc32fast",
  "hub-backend",
@@ -1588,7 +1588,7 @@ dependencies = [
 
 [[package]]
 name = "panopticon-setup"
-version = "0.2.41"
+version = "0.2.46"
 dependencies = [
  "serde",
  "serde_json",

@@ -22,6 +22,7 @@ end
 do
     local getLoadPanel = GetLoadPanel
     local bridgedPanel
+    local defaultLoadingPage = "asset://garrysmod/html/loading.html"
 
     local function publishLoading(loading)
         if not IsValid(pnlMainMenu) then return end
@@ -66,7 +67,7 @@ do
             local lastHTML, lastStatus
             function panel:CheckForStatusChanges()
                 local html = self.HTML
-                if self.LoadedURL ~= "asset://garrysmod/html/loading.html" or not IsValid(html) then
+                if self.LoadedURL ~= defaultLoadingPage or not IsValid(html) then
                     lastHTML, lastStatus = nil, nil
                     return checkStatus(self)
                 end

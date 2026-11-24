@@ -37,6 +37,7 @@ const LAB_MODULE: &str = "lua/bin/gmcl_panopticon_perf_win64.dll";
 const LEGACY_GEOMETRY: &str = "lua/bin/gmcl_panopticon_geometry_win64.dll";
 const BACKGROUND_ADAPTER: &[u8] =
     include_bytes!("../../game-ui/source/lua/menu/panopticon_background.lua");
+const LEGACY_SKIPPED_LOADING_PAGE: &str = "html/panopticon/loading-skipped.html";
 const DESIGN_PROFILE: &str = "html/panopticon/design-profile.js";
 const GAME_IDENTITY: &str = "html/panopticon/design-identity.json";
 const DESIGN_MEDIA: &str = "html/panopticon/design-media/";
@@ -215,13 +216,13 @@ fn stage_media(root: &Path, session: &mut Session, key: &str) -> Result<(), Stri
     Ok(())
 }
 
-fn apply_media(root: &Path, entries: &[Entry]) -> Result<(), String> {
+fn apply_media(root: &Path, entries: &[Entry], mut media: design::GameMedia) -> Result<(), String> {
     for entry in entries {
         let key = entry.name.strip_prefix(DESIGN_MEDIA).ok_or("Не найден путь игрового оформления.")?;
         let path = ordinary(root, &entry.name)?;
         let parent = path.parent().ok_or("Не найден каталог игрового оформления.")?;
         fs::create_dir_all(parent).map_err(|err| err.to_string())?;
-        let mut source = design::open_media(key)?;
+        let mut source = media.take(key)?;
         let mut temp = tempfile::NamedTempFile::new_in(parent).map_err(|err| err.to_string())?;
         io::copy(&mut source, &mut temp).map_err(|err| err.to_string())?;
         temp.as_file().sync_all().map_err(|err| err.to_string())?;
@@ -344,6 +345,7 @@ fn restore(
             && entry.name != LEGACY_GEOMETRY
             && entry.name != DESIGN_PROFILE
             && entry.name != GAME_IDENTITY
+            && entry.name != LEGACY_SKIPPED_LOADING_PAGE
             && !GAME_FILES
                 .iter()
                 .any(|(name, _)| *name == entry.name)
@@ -449,8 +451,16 @@ fn workshop_filter(original: Option<&[u8]>, plan: &MountPlan) -> Result<Option<V
     Ok(Some(contents.into_bytes()))
 }
 
+#[derive(Deserialize, Serialize)]
+struct LaunchOptions {
+    #[serde(flatten)]
+    workshop: MountPlan,
+    #[serde(default)]
+    skip_loading_screen: bool,
+}
+
 pub fn run(steam_root: &Path, game_root: &Path) -> Result<(), String> {
-    let plan: MountPlan = serde_json::from_reader(std::io::stdin().lock().take(LIMIT))
+    let LaunchOptions { workshop: plan, skip_loading_screen } = serde_json::from_reader(std::io::stdin().lock().take(LIMIT))
         .map_err(|err| format!("Не удалось прочитать параметры запуска: {err}"))?;
     let request = steam::inspect_launch(steam_root, game_root)?;
     game_profile::check_running_at(game_root)?;
@@ -479,15 +489,8 @@ pub fn run(steam_root: &Path, game_root: &Path) -> Result<(), String> {
     if !GAME_FILES.iter().any(|(name, _)| *name == MODULE) {
         return Err("В сборке отсутствует игровой модуль Panopticon.".into());
     }
-    let saved_settings = match read(&settings, LIMIT)? {
-        Some(bytes) => bytes,
-        None => {
-            let bytes = read(&ordinary(&root, SETTINGS)?, LIMIT)?.unwrap_or_else(|| b"{}".to_vec());
-            put(&settings, Some(&bytes))?;
-            bytes
-        }
-    };
-    let design = design::load().unwrap_or_default();
+    migrate_settings_if_missing(&ordinary(&root, SETTINGS)?, &settings)?;
+    let (design, game_media) = design::load_for_game().unwrap_or_default();
     let game_assets: std::collections::BTreeMap<_, _> = design.assets.iter()
         .filter(|(slot, _)| matches!(slot.as_str(),
             "gameMenuBackground" | "gameBrowserBackground" | "gameLoadingBackground" | "gameLogo" | "gameIcon"
@@ -505,6 +508,7 @@ pub fn run(steam_root: &Path, game_root: &Path) -> Result<(), String> {
         "assets": game_assets,
         "gameLoadingVolume": design.game_loading_volume,
         "backgroundFilters": game_filters,
+        "skipLoadingScreen": skip_loading_screen,
     });
     let profile = format!("window.PanopticonDesign = {profile};");
     let identity = serde_json::json!({
@@ -512,12 +516,10 @@ pub fn run(steam_root: &Path, game_root: &Path) -> Result<(), String> {
         "icon": game_assets.get("gameIcon"),
     }).to_string();
     let mut assets = GAME_FILES.to_vec();
-    assets.push((SETTINGS, saved_settings.as_slice()));
     assets.push((DESIGN_PROFILE, profile.as_bytes()));
     assets.push((GAME_IDENTITY, identity.as_bytes()));
     let original_background = read(&ordinary(&root, BACKGROUND)?, LIMIT)?;
-    let patched_background = original_background
-        .as_deref()
+    let patched_background = original_background.as_deref()
         .map(|original| [original, b"\n", BACKGROUND_ADAPTER].concat());
     if let Some(bytes) = patched_background.as_deref() {
         if bytes.len() as u64 > LIMIT {
@@ -531,7 +533,7 @@ pub fn run(steam_root: &Path, game_root: &Path) -> Result<(), String> {
         assets.push((WORKSHOP_FILTER, bytes));
     }
     let mut session = Session {
-        settings: Some(settings.clone()),
+        settings: None,
         started: false,
         entries: Vec::new(),
         filtering: None,
@@ -557,7 +559,7 @@ pub fn run(steam_root: &Path, game_root: &Path) -> Result<(), String> {
     let mut played = false;
     let result = (|| {
         apply(&root, &session, &assets)?;
-        apply_media(&root, &session.entries[assets.len()..])?;
+        apply_media(&root, &session.entries[assets.len()..], game_media)?;
         game_profile::check_running_at(game_root)?;
         let refreshed = steam::inspect_launch(steam_root, game_root)?;
         if refreshed.build_id != request.build_id || refreshed.executable != request.executable {
@@ -605,14 +607,17 @@ pub fn run(steam_root: &Path, game_root: &Path) -> Result<(), String> {
             Err(error) => format!("{error}\n{cleanup}"),
         });
     }
-    if !played {
-        session.settings = None;
-    }
     restore(&root, &journal, &settings, &session, played)?;
-    if played {
-        hub_backend::bindings::flush(&cfg)?;
-    }
     result
+}
+
+fn migrate_settings_if_missing(live: &Path, legacy: &Path) -> Result<(), String> {
+    if read(live, LIMIT)?.is_none() {
+        if let Some(previous) = read(legacy, LIMIT)? {
+            put(live, Some(&previous))?;
+        }
+    }
+    Ok(())
 }
 
 pub struct Game {
@@ -648,7 +653,7 @@ fn worker_error(line: &str, default: &str) -> String {
         .to_owned()
 }
 
-pub fn start(req: &LaunchRequest, cancel: &AtomicBool, plan: MountPlan) -> Result<Game, String> {
+pub fn start(req: &LaunchRequest, cancel: &AtomicBool, plan: MountPlan, skip_loading_screen: bool) -> Result<Game, String> {
     if cancel.load(Ordering::Acquire) {
         return Err("LAUNCH_CANCELLED".into());
     }
@@ -663,7 +668,8 @@ pub fn start(req: &LaunchRequest, cancel: &AtomicBool, plan: MountPlan) -> Resul
         .spawn()
         .map_err(|err| err.to_string())?;
     let input = worker.stdin.take().ok_or("Не удалось передать список Workshop.")?;
-    if let Err(error) = serde_json::to_writer(input, &plan) {
+    let options = LaunchOptions { workshop: plan, skip_loading_screen };
+    if let Err(error) = serde_json::to_writer(input, &options) {
         let _ = worker.wait();
         return Err(error.to_string());
     }
@@ -684,6 +690,20 @@ pub fn start(req: &LaunchRequest, cancel: &AtomicBool, plan: MountPlan) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn loading_screen_opt_out_reaches_the_game_worker() {
+        let legacy = serde_json::to_vec(&MountPlan::default()).unwrap();
+        assert!(!serde_json::from_slice::<LaunchOptions>(&legacy).unwrap().skip_loading_screen);
+        let options = LaunchOptions {
+            workshop: MountPlan { allowed: vec![42], ..MountPlan::default() },
+            skip_loading_screen: true,
+        };
+        let json = serde_json::to_vec(&options).unwrap();
+        let received: LaunchOptions = serde_json::from_slice(&json).unwrap();
+        assert!(received.skip_loading_screen);
+        assert_eq!(received.workshop.allowed, vec![42]);
+    }
 
     #[test]
     fn design_media_recovery_preserves_independent_files() {
@@ -877,3 +897,38 @@ mod tests {
         );
     }
 }
+    #[test]
+    fn imports_legacy_settings_only_when_the_game_has_no_profile() {
+        let directory = tempfile::tempdir().unwrap();
+        let live = directory.path().join("drp.settings.txt");
+        let legacy = directory.path().join("hub-settings.txt");
+        fs::write(&legacy, br#"{"showHUD":false}"#).unwrap();
+        migrate_settings_if_missing(&live, &legacy).unwrap();
+        assert_eq!(fs::read(&live).unwrap(), fs::read(&legacy).unwrap());
+
+        fs::write(&live, br#"{"showHUD":true}"#).unwrap();
+        migrate_settings_if_missing(&live, &legacy).unwrap();
+        assert_eq!(fs::read(&live).unwrap(), br#"{"showHUD":true}"#);
+    }
+    #[test]
+    fn recovers_the_legacy_loading_page_after_a_game_session() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let journal = root.join(STATE);
+        let name = LEGACY_SKIPPED_LOADING_PAGE;
+        let content = b"<!doctype html>\n<meta charset=\"utf-8\">\n<style>html { background: #000; }</style>\n";
+        let target = root.join(name);
+        let session = Session {
+            settings: None,
+            started: true,
+            entries: vec![Entry { name: name.into(), before: None, installed: hash(content) }],
+            filtering: None,
+        };
+        put(&target, Some(content)).unwrap();
+        save_session(&journal, &session).unwrap();
+        assert_eq!(fs::read(&target).unwrap(), content);
+
+        recover(root, &journal, &root.join("settings")).unwrap();
+        assert!(!target.exists());
+        assert!(!journal.exists());
+    }

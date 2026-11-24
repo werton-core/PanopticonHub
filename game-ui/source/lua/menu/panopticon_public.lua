@@ -36,9 +36,14 @@ local engineMap = {
     modelQuality = "r_rootlod", shaderSpecular = "mat_specular", mouseFilter = "m_filter", frameRate = "fps_max",
     textureTrilinear = "mat_trilinear", voiceEnabled = "voice_enable", voicePlayers = "voice_scale"
 }
-local bindingCommands = {["+back"] = true, invprev = true, ["+attack2"] = true, ["+jump"] = true, gmod_undo = true, ["+reload"] = true,
-    ["+use"] = true, ["+menu_context"] = true, ["+attack"] = true, noclip = true, ["+walk"] = true, invnext = true, ["+forward"] = true,
-    ["+duck"] = true, ["+moveright"] = true, ["+voicerecord"] = true, messagemode = true, lastinv = true, toggleconsole = true, ["+speed"] = true, ["+moveleft"] = true, ["+menu"] = true}
+local bindingDefaults = {
+    ["+forward"] = "w", ["+back"] = "s", ["+moveleft"] = "a", ["+moveright"] = "d",
+    ["+jump"] = "space", ["+duck"] = "ctrl", ["+speed"] = "shift", ["+walk"] = "alt",
+    ["+attack"] = "mouse1", ["+attack2"] = "mouse2", ["+reload"] = "r", ["+use"] = "e",
+    ["+menu"] = "q", ["+menu_context"] = "c", ["+voicerecord"] = "x", gmod_undo = "z",
+    invprev = "mwheelup", invnext = "mwheeldown", lastinv = "", noclip = "v",
+    messagemode = "y", toggleconsole = "`"
+}
 local customBindings = {
     ["+closelook"] = true, ["+interact"] = true, ["+inspect"] = true, ["+openinv"] = true,
     ["+fast_actions"] = true, ["+dro_graffiti_place"] = true, ["+dro_thirdperson_toggle"] = true,
@@ -58,7 +63,7 @@ local function call(name, ...)
     pnlMainMenu:Call("window." .. name .. " && window." .. name .. "(" .. table.concat(args, ",") .. ")")
 end
 local function settingsError(message)
-    Derma_Message(message, "Panopticon Hub", "Понятно")
+    call("PTHubSettingsNotice", message)
 end
 local function validAddress(value)
     if not isstring(value) then return false end
@@ -277,6 +282,10 @@ function hub.ApplyHubLanguage()
     call("UpdateLanguage", GetConVarString("gmod_language"))
     call("UpdateHubRegion", selection.region == "global" and "eu" or "cis")
 end
+local function readClientConfig()
+    local data = native and native.ReadSharedSettings and native.ReadSharedSettings()
+    return data and util.JSONToTable(data) or {}
+end
 function hub.RequestEngineSettings()
     local result = {}
     for key, command in pairs(engineMap) do
@@ -287,18 +296,15 @@ function hub.RequestEngineSettings()
         local voice = util.JSONToTable(native.GetVoiceSettings() or "")
         if istable(voice) then table.Merge(result, voice) end
     end
-    if result.volumeEffects == nil then result.volumeEffects = shared["volume.effects"] or 0.7 end
+    if result.volumeEffects == nil then result.volumeEffects = readClientConfig()["volume.effects"] or 0.7 end
     call("STEngineSettings", result)
-end
-local function readClientConfig()
-    local data = native and native.ReadSharedSettings and native.ReadSharedSettings()
-    return data and util.JSONToTable(data) or {}
 end
 local function writeClientConfig(changes)
     if not native or not native.ApplySharedSettings then return false end
     return native.ApplySharedSettings(util.TableToJSON(changes))
 end
 local loadingSettings = {
+    serverLoadingScreens = {get = "GetServerLoadingScreens", set = "SetServerLoadingScreens", default = false, label = "Экраны загрузки серверов"},
     loadingIndicator = {get = "GetLoadingIndicator", set = "SetLoadingIndicator", default = false, label = "Штатный индикатор загрузки"},
     shinriIdentity = {get = "GetShinriIdentity", set = "SetShinriIdentity", default = true, label = "Идентификатор Shinri Hub"}
 }
@@ -310,11 +316,11 @@ local function withLoadingSettings(values)
     return values
 end
 local function saveLoadingSetting(setting, value, action)
-    if loadingValue(setting) == nil then return false end
-    if not native[setting.set](value) then
-        settingsError("Не удалось " .. action .. " настройку «" .. setting.label .. "».")
-    end
-    return true
+    local previous = loadingValue(setting)
+    if previous == nil then return false end
+    if previous == value or native[setting.set](value) then return true end
+    settingsError("Не удалось " .. action .. " настройку «" .. setting.label .. "».")
+    return false
 end
 function hub.RequestSharedSettings()
     local values = table.Copy(shared)
@@ -333,15 +339,9 @@ local function nativeBindings(name)
     return raw and util.JSONToTable(raw) or {}
 end
 function hub.RequestBindings()
-    local pending = nativeBindings("ReadEngineBindings")
     local values = nativeBindings("ReadCustomBindings")
-    local reserved = {}
-    for command, key in pairs(pending) do
-        if key ~= "" then reserved[key:upper()] = command end
-    end
-    for command in pairs(bindingCommands) do
-        local actual = input.LookupBinding(command, true) or ""
-        values[command] = pending[command] or (not reserved[actual:upper()] and actual) or ""
+    for command in pairs(bindingDefaults) do
+        values[command] = input.LookupBinding(command, true) or ""
     end
     call("STBindings", values)
 end
@@ -356,9 +356,21 @@ end
 local function finite(value)
     return isnumber(value) and value == value and math.abs(value) < 100000
 end
-local function saveEngine()
+local videoCommands = {
+    r_flashlightdepthtexture = true, r_waterforceexpensive = true, mat_hdr_level = true,
+    mat_picmip = true, r_shadowrendertotexture = true, mat_vsync = true, mat_forceaniso = true,
+    mat_motion_blur_enabled = true, mat_antialias = true, mat_bumpmap = true,
+    r_waterforcereflectentities = true, r_rootlod = true, mat_specular = true, mat_trilinear = true
+}
+local videoSavePending = false
+local deferredVideoReset = {}
+local deferredIdentityReset = false
+local quitAfterReset = false
+local function saveEngine(video)
+    videoSavePending = videoSavePending or video == true
     timer.Create("PanopticonHub.SaveSettings", 0.4, 1, function()
-        RunConsoleCommand("host_writeconfig")
+        if native and native.SaveEngineConfig then native.SaveEngineConfig(videoSavePending) end
+        videoSavePending = false
     end)
 end
 function hub.SetLanguage(locale)
@@ -369,25 +381,41 @@ function hub.SetLanguage(locale)
     saveEngine()
 end
 
-function hub.ApplyEngineSettings(raw)
-    local values = util.JSONToTable(tostring(raw or "")) or {}
+local function applyEngineSettings(values)
+    local commands, video, changed, failed = {}, false, false, false
     for key, value in pairs(values) do
         local command, number = engineMap[key], tonumber(value)
         if finite(number) then
-            if command and GetConVar(command) then
-                RunConsoleCommand(command, tostring(number))
+            local convar = command and GetConVar(command)
+            if convar then
+                if math.abs(convar:GetFloat() - number) > 0.00001 then
+                    commands[command] = number
+                    video = video or videoCommands[command] == true
+                end
             elseif key == "volumeEffects" then
                 local volume = math.Clamp(number, 0, 1)
-                if writeClientConfig({["volume.effects"] = volume}) then
-                    shared["volume.effects"] = volume
-                    call("STEngineSettings", {volumeEffects = volume})
-                end
+                if not writeClientConfig({["volume.effects"] = volume}) then failed = true end
             elseif (key == "voiceMicrophone" or key == "voiceBoost") and native and native.SetVoiceSetting then
-                native.SetVoiceSetting(key, number)
+                if native.SetVoiceSetting(key, number) then changed = true else failed = true end
             end
         end
     end
-    saveEngine()
+    if next(commands) then
+        if native and native.ApplyEngineSettings and native.ApplyEngineSettings(util.TableToJSON(commands)) then
+            changed = true
+        else
+            failed = true
+        end
+    end
+    if changed then saveEngine(video) end
+    if failed then settingsError("Не удалось применить настройки Garry’s Mod.") end
+end
+function hub.ApplyEngineSettings(raw)
+    local values = util.JSONToTable(tostring(raw or "")) or {}
+    for key, value in pairs(values) do
+        if finite(tonumber(value)) then deferredVideoReset[key] = nil end
+    end
+    applyEngineSettings(values)
 end
 function hub.ApplySharedSettings(raw)
     local values = util.JSONToTable(tostring(raw or "")) or {}
@@ -396,10 +424,12 @@ function hub.ApplySharedSettings(raw)
         local default = sharedDefaults[key]
         local loadingSetting = loadingSettings[key]
         if loadingSetting and isbool(value) then
-            if key == "shinriIdentity" and connection.Busy() then
-                settingsError("Дождитесь подготовки подключения или отмените её.")
+            if key == "shinriIdentity" and (connection.Busy() or IsInGame() or IsInLoading()) then
                 hub.RequestSharedSettings()
-            else loadingTouched = saveLoadingSetting(loadingSetting, value, "сохранить") or loadingTouched end
+            else
+                saveLoadingSetting(loadingSetting, value, "сохранить")
+                loadingTouched = true
+            end
         elseif key == "musicVolume" and finite(value) then
             shared[key], menuChanged = math.Clamp(value, 0, 1), true
         elseif type(menuDefaults[key]) == "boolean" and isbool(value) then
@@ -425,7 +455,7 @@ function hub.ApplySharedSettings(raw)
     if loadingTouched and not menuChanged then hub.RequestSharedSettings() end
 end
 local function bindableKey(key)
-    return isstring(key) and #key > 0 and #key <= 30 and key:match("^[%w_`%[%]'/.,=+%-]+$") ~= nil
+    return isstring(key) and #key > 0 and #key <= 30 and key:match("^[%w_`%[%]'/.,=+;%\\%-]+$") ~= nil
 end
 
 function hub.SetBindCapture(enabled)
@@ -468,41 +498,105 @@ function hub.SetBindCapture(enabled)
     end)
 end
 
-function hub.ApplyBindings(raw)
-    local changes = isstring(raw) and #raw <= 4096 and util.JSONToTable(raw)
-    if not istable(changes) then return end
+local function liveBindingKeys()
+    local keys = {}
+    for code = KEY_0, BUTTON_CODE_LAST or JOYSTICK_LAST or MOUSE_LAST do
+        local command = input.LookupKeyBinding(code)
+        if isstring(command) and command ~= "" then
+            local key = input.GetKeyName(code)
+            if bindableKey(key) then keys[key:lower()] = command end
+        end
+    end
+    return keys
+end
 
-    local pending = nativeBindings("ReadEngineBindings")
-    local stock, custom = {}, {}
+local function applyStockBindings(plan, applyCustom)
+    if not next(plan) then
+        applyCustom()
+        hub.RequestBindings()
+        return
+    end
+    if not (native and native.ApplyEngineBindings and native.ApplyEngineBindings(util.TableToJSON(plan))) then
+        settingsError("Не удалось применить привязки Garry’s Mod.")
+        hub.RequestBindings()
+        return
+    end
+    timer.Simple(0.1, function()
+        for key, command in pairs(plan) do
+            local code = input.GetKeyCode(key)
+            if (input.LookupKeyBinding(code) or ""):lower() ~= command then
+                settingsError("Garry’s Mod не применил одну из привязок клавиш.")
+                hub.RequestBindings()
+                return
+            end
+        end
+        applyCustom()
+        hub.RequestBindings()
+    end)
+end
+
+local function applyBindings(changes, resetCustom)
+    local stock, custom, requested = {}, {}, {}
+    local available = nativeBindings("ReadCustomBindings")
+    if resetCustom then
+        for command in pairs(available) do custom[command] = false end
+    end
     for command, key in pairs(changes) do
-        if not (bindingCommands[command] or customBindings[command]) or (key ~= "" and not bindableKey(key)) then
+        if (bindingDefaults[command] == nil and not customBindings[command]) or (key ~= "" and not bindableKey(key)) then
             settingsError("Недопустимая привязка клавиши.")
             hub.RequestBindings()
             return
         end
         local code = key == "" and -1 or (input.GetKeyCode(key:lower()) or 0)
-        if code == 0 or code == KEY_ESCAPE then
+        if (key ~= "" and code <= 0) or code == KEY_ESCAPE then
             settingsError("Garry’s Mod не распознал выбранную клавишу.")
             hub.RequestBindings()
             return
         end
         if customBindings[command] then
-            custom[command] = code
+            if available[command] ~= nil then custom[command] = code end
         else
-            local current = pending[command] or input.LookupBinding(command, true) or ""
-            if current:upper() ~= key:upper() then stock[command] = key end
+            if key ~= "" then
+                key = input.GetKeyName(code)
+                if not bindableKey(key) then
+                    settingsError("Garry’s Mod не распознал выбранную клавишу.")
+                    hub.RequestBindings()
+                    return
+                end
+                key = key:lower()
+            end
+            if key ~= "" and requested[key] then
+                settingsError("Одна клавиша назначена нескольким действиям.")
+                hub.RequestBindings()
+                return
+            end
+            if key ~= "" then requested[key] = command end
+            if (input.LookupBinding(command, true) or ""):lower() ~= key then stock[command] = key end
         end
     end
-    if next(stock) and not (native and native.QueueEngineBindings and native.QueueEngineBindings(util.TableToJSON(stock))) then
-        settingsError("Не удалось сохранить привязки Garry’s Mod.")
-    end
-    for command, code in pairs(custom) do
-        if not (native and native.SetCustomBinding and native.SetCustomBinding(command, code)) then
-            settingsError("Не удалось применить клавишу действия Panopticon.")
-            break
+
+    local plan = {}
+    if next(stock) or next(custom) then
+        for key, command in pairs(liveBindingKeys()) do
+            command = command:lower()
+            if stock[command] ~= nil or custom[command] ~= nil then plan[key] = "" end
+        end
+        for command, key in pairs(stock) do
+            if key ~= "" then plan[key] = command end
         end
     end
-    hub.RequestBindings()
+    applyStockBindings(plan, function()
+        for command, code in pairs(custom) do
+            if not native.SetCustomBinding(command, code or nil) then
+                settingsError("Не удалось применить клавишу действия игрового режима.")
+                return
+            end
+        end
+    end)
+end
+function hub.ApplyBindings(raw)
+    local changes = isstring(raw) and #raw <= 4096 and util.JSONToTable(raw)
+    if istable(changes) then applyBindings(changes, false) end
 end
 function hub.ApplyVideoMode(width, height, mode)
     if native and native.ApplyVideoMode and native.ApplyVideoMode(tonumber(width), tonumber(height), mode) then
@@ -616,44 +710,86 @@ function hub.OpenURL(url)
     end
     settingsError("Не удалось открыть эту ссылку.")
 end
-function hub.Quit()
-    connection.Cancel()
-    stopVoiceTest("idle")
+local function quitGame()
+    if timer.Exists("PanopticonHub.SaveSettings") then
+        timer.Remove("PanopticonHub.SaveSettings")
+        if native and native.SaveEngineConfig then native.SaveEngineConfig(videoSavePending) end
+        videoSavePending = false
+    end
     if native and native.GameAction and native.GameAction("Quit") then return end
     RunGameUICommand("QuitNoConfirm")
 end
+function hub.Quit()
+    connection.Cancel()
+    stopVoiceTest("idle")
+    if timer.Exists("PanopticonHub.DeferredReset") then
+        quitAfterReset = true
+        if IsInGame() then RunGameUICommand("Disconnect") end
+        return
+    end
+    quitGame()
+end
+local function finishDeferredReset()
+    if IsInGame() or IsInLoading() or connection.Busy() then return end
+    timer.Remove("PanopticonHub.DeferredReset")
+    local graphics = deferredVideoReset
+    deferredVideoReset = {}
+    if next(graphics) then applyEngineSettings(graphics) end
+    if deferredIdentityReset then
+        deferredIdentityReset = false
+        saveLoadingSetting(loadingSettings.shinriIdentity, true, "сбросить")
+    end
+    timer.Simple(0.25, function()
+        hub.RequestEngineSettings()
+        hub.RequestSharedSettings()
+        hub.RequestVideoModes()
+    end)
+    if quitAfterReset then timer.Simple(0.6, quitGame) end
+end
 function hub.ResetAllSettings()
-    if connection.Busy() then settingsError("Сначала отмените подготовку подключения.") return end
-    for _, command in pairs(engineMap) do
-        local value = GetConVar(command)
-        if value then RunConsoleCommand(command, value:GetDefault()) end
+    if connection.Busy() or IsInLoading() then
+        call("STSettingsReset", false)
+        settingsError("Сброс настроек доступен после завершения подключения.")
+        return
     end
-    if native and native.SetVoiceSetting then
-        native.SetVoiceSetting("voiceMicrophone", 1)
-        native.SetVoiceSetting("voiceBoost", 0)
-    end
-    shared = table.Copy(menuDefaults)
-    cookie.Set(menuCookie, util.TableToJSON(shared))
-    for _, setting in pairs(loadingSettings) do saveLoadingSetting(setting, setting.default, "сбросить") end
-    local reset
-    if IsInGame() then
-        local defaults = table.Copy(sharedDefaults)
-        defaults["volume.effects"] = 0.7
-        reset = writeClientConfig(defaults)
-    else
-        reset = native and native.ResetSharedSettings and native.ResetSharedSettings()
-    end
-    if not reset then settingsError("Не удалось сбросить настройки этого клиента.") end
-    if not (native and native.QueueEngineBindings and native.QueueEngineBindings(nil)) then
-        settingsError("Не удалось восстановить штатные привязки Garry’s Mod.")
-    end
-    for command in pairs(nativeBindings("ReadCustomBindings")) do
-        if not native.SetCustomBinding(command, nil) then
-            settingsError("Не удалось восстановить клавиши Panopticon.")
-            break
+    call("STSettingsReset", true)
+    local inGame = IsInGame()
+    local values = {}
+    local voice = nativeBindings("GetVoiceSettings")
+    if voice.voiceMicrophone ~= nil and voice.voiceMicrophone ~= 1 then values.voiceMicrophone = 1 end
+    if voice.voiceBoost ~= nil and voice.voiceBoost ~= 0 then values.voiceBoost = 0 end
+    deferredVideoReset = {}
+    for key, command in pairs(engineMap) do
+        local convar = GetConVar(command)
+        if convar then
+            local default = tonumber(convar:GetDefault())
+            if finite(default) and math.abs(convar:GetFloat() - default) > 0.00001 then
+                if inGame and videoCommands[command] then deferredVideoReset[key] = default
+                else values[key] = default end
+            end
         end
     end
-    saveEngine()
+    applyEngineSettings(values)
+    shared = table.Copy(menuDefaults)
+    cookie.Set(menuCookie, util.TableToJSON(shared))
+    for key, setting in pairs(loadingSettings) do
+        if key == "shinriIdentity" and inGame then
+            deferredIdentityReset = loadingValue(setting) == false
+        else
+            saveLoadingSetting(setting, setting.default, "сбросить")
+        end
+    end
+    local defaults = table.Copy(sharedDefaults)
+    defaults["volume.effects"] = 0.7
+    local reset = writeClientConfig(defaults)
+    if not reset then settingsError("Не удалось сбросить настройки этого клиента.") end
+    applyBindings(bindingDefaults, true)
+    if next(deferredVideoReset) or deferredIdentityReset then
+        timer.Create("PanopticonHub.DeferredReset", 0.25, 0, finishDeferredReset)
+        local message = next(deferredVideoReset) and "Настройки графики будут сброшены после выхода с сервера."
+            or "Идентификатор Shinri Hub будет сброшен после выхода с сервера."
+        settingsError(message)
+    end
     timer.Simple(0.2, function()
         hub.RequestEngineSettings()
         hub.RequestSharedSettings()
@@ -661,8 +797,22 @@ function hub.ResetAllSettings()
         hub.RequestVideoModes()
     end)
 end
+local lastWindowMediaVisible
+local lastWindowMediaCheck
+local function publishWindowMediaVisibility(force)
+    if not native or not native.WindowMediaVisible then return end
+    local now = SysTime()
+    local resumed = lastWindowMediaCheck ~= nil and now - lastWindowMediaCheck > 0.75
+    lastWindowMediaCheck = now
+    local visible = native.WindowMediaVisible()
+    if isbool(visible) and (force or (visible and resumed) or visible ~= lastWindowMediaVisible) then
+        lastWindowMediaVisible = visible
+        call("PTHubGameMediaWake", visible, visible and resumed)
+    end
+end
 function hub.Ready()
     if native and native.ApplyWindowIdentity then native.ApplyWindowIdentity() end
+    publishWindowMediaVisibility(true)
     hub.ApplyHubLanguage()
     hub.RequestInGame()
     hub.RequestLoading()
@@ -696,14 +846,15 @@ function hub.Ready()
 end
 function hub.CompleteIntro()
     hub.IntroCompleted = true
+    timer.Remove("PanopticonHub.IntroReady")
 end
 function STSetLoadingTranslations() end
 function STSetDiscordTranslations() end
 local stored = util.JSONToTable(cookie.GetString(menuCookie, ""))
 if istable(stored) then for key in pairs(shared) do if type(stored[key]) == type(shared[key]) then shared[key] = stored[key] end end end
-shared["volume.effects"] = tonumber(readClientConfig()["volume.effects"])
 local lastInGame, lastLoading, lastReconnect
 timer.Create("PanopticonHub.Loading", 0.15, 0, function()
+    publishWindowMediaVisibility(false)
     connection.Poll()
     local inGame, loading = gameState()
     if (lastInGame or lastLoading) and not inGame and not loading then connection.Cleanup() end

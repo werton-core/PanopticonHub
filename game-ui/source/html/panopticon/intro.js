@@ -5,6 +5,7 @@
     var SHOW_WARNING_AT = 11.08;
     var stablePaintMs = 300;
     var engineReady = window.location.protocol !== 'asset:';
+    var skipLoadingScreen = window.PanopticonDesign && window.PanopticonDesign.skipLoadingScreen === true;
     var introAlreadyPlayed = false;
     var finishAlreadyPlayed;
 
@@ -14,6 +15,16 @@
     var fallback = overlay.querySelector('.pt-intro__fallback');
     var message = overlay.querySelector('.pt-intro__message');
     var button = overlay.querySelector('.pt-intro__hit');
+    if (!skipLoadingScreen) {
+        video.src = video.dataset.src;
+        fallback.src = fallback.dataset.src;
+    }
+
+    function completeIntro() {
+        if (window.lua && typeof window.lua.Run === 'function') {
+            window.lua.Run('stMenu.CompleteIntro()');
+        }
+    }
 
     function update(title, body, age) {
         message.querySelector('h1').textContent = title;
@@ -44,11 +55,18 @@
             onDone();
             return;
         }
+        if (skipLoadingScreen) {
+            introAlreadyPlayed = true;
+            completeIntro();
+            onDone();
+            return;
+        }
         var done = false;
         var closing = false;
         var showingFallback = false;
         var paintId;
         var videoId;
+        var playAttempt = 0;
         var fallbackTimer;
         var transitionTimer;
         var presentedTime = 0;
@@ -57,6 +75,7 @@
         var stableSince;
         var lastPaint;
         var frameCallbacks = typeof video.requestVideoFrameCallback === 'function';
+        var design = window.PTHubGameDesign;
         var previousFocus = document.activeElement;
         overlay.hidden = false;
         video.hidden = false;
@@ -66,8 +85,10 @@
         button.focus({ preventScroll: true });
 
         function cancelFrames() {
+            playAttempt++;
             cancelAnimationFrame(paintId);
             if (videoId !== undefined && video.cancelVideoFrameCallback) video.cancelVideoFrameCallback(videoId);
+            paintId = undefined;
             videoId = undefined;
         }
 
@@ -84,15 +105,14 @@
             overlay.removeEventListener('animationend', transitionEnded);
             video.removeEventListener('ended', finished);
             video.removeEventListener('error', showFallback);
+            unwatchVisibility();
             video.pause();
             overlay.hidden = true;
             overlay.classList.remove('pt-intro--closing', 'pt-intro--revealing', 'pt-intro--mark');
             finishAlreadyPlayed = undefined;
             if (previousFocus && document.contains(previousFocus)) previousFocus.focus();
             if (notify) {
-                if (window.lua && typeof window.lua.Run === 'function') {
-                    window.lua.Run('stMenu.CompleteIntro()');
-                }
+                completeIntro();
                 onDone();
             }
         }
@@ -176,14 +196,17 @@
         }
 
         function onLegacyFrame() {
-            syncWarning(video.currentTime);
+            presentedTime = video.currentTime;
+            syncWarning(presentedTime);
             paintId = requestAnimationFrame(onLegacyFrame);
         }
 
         function startWhenVisible(now) {
+            paintId = undefined;
+            if (!design.mediaVisible()) return;
             var mediaReady = video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA && !video.seeking;
             var waited = now - waitingSince;
-            if (document.hidden || !mediaReady || now - lastPaint > 125) stableSince = undefined;
+            if (!mediaReady || now - lastPaint > 125) stableSince = undefined;
             else if (stableSince === undefined) stableSince = now;
             lastPaint = now;
 
@@ -192,8 +215,11 @@
                 video.style.visibility = '';
                 if (frameCallbacks) videoId = video.requestVideoFrameCallback(onVideoFrame);
                 else paintId = requestAnimationFrame(onLegacyFrame);
-                video.play().catch(showFallback);
-            } else if (video.error || (!document.hidden && !mediaReady && waited >= 15000)) {
+                var attempt = ++playAttempt;
+                video.play().catch(function (error) {
+                    if (attempt === playAttempt && error.name !== 'AbortError') showFallback();
+                });
+            } else if (video.error || (!mediaReady && waited >= 15000)) {
                 showFallback();
             } else {
                 paintId = requestAnimationFrame(startWhenVisible);
@@ -206,9 +232,21 @@
             waitingSince = performance.now();
             stableSince = undefined;
             lastPaint = waitingSince;
-            paintId = requestAnimationFrame(startWhenVisible);
+            if (design.mediaVisible()) paintId = requestAnimationFrame(startWhenVisible);
         }
 
+        var unwatchVisibility = design.watchMediaVisibility(function (visible, transitioned) {
+            if (done || closing || showingFallback) return;
+            if (!visible) {
+                cancelFrames();
+                video.pause();
+                return;
+            }
+            if (!transitioned && (!video.paused || paintId !== undefined)) return;
+            video.pause();
+            if (video.currentTime !== presentedTime) video.currentTime = presentedTime;
+            waitForPaint();
+        });
         document.addEventListener('keydown', skipKey, true);
         overlay.addEventListener('click', skip, true);
         overlay.addEventListener('auxclick', skip, true);

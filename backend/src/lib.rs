@@ -23,7 +23,7 @@ pub struct Event {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowCommand {
-    Hide,
+    Minimize,
     Drag,
     Close,
     Show,
@@ -153,7 +153,7 @@ impl Backend {
         match channel {
             "window-control" => {
                 let command = match string(args, 0)? {
-                    "minimize" => WindowCommand::Hide,
+                    "minimize" => WindowCommand::Minimize,
                     "drag" => WindowCommand::Drag,
                     "close" => WindowCommand::Close,
                     _ => return Err("Неизвестная команда окна".into()),

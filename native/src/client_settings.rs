@@ -183,7 +183,7 @@ impl Client {
             match unsafe { std::slice::from_raw_parts(ptr.cast(), length) } {
                 b"panopticon" => Some(Gamemode::Panopticon),
                 b"shinri_trial" => Some(Gamemode::Shinri),
-                _ => None,
+                _ => Some(Gamemode::Other),
             }
         })?;
         if mode == Gamemode::Shinri
@@ -318,16 +318,56 @@ impl Client {
         self.function(&[c"input", c"GetKeyName"], |client| {
             unsafe { (client.push_number)(client.state, f64::from(code)) };
             client.call(1, 1)?;
-            if client.stack_type() != 4 {
-                return None;
+            client.read_key_name()
+        })
+    }
+
+    fn read_key_name(&self) -> Option<String> {
+        if self.stack_type() != 4 {
+            return None;
+        }
+        let mut length = 0;
+        let ptr = unsafe { (self.get_string)(self.state, -1, &mut length) };
+        if ptr.is_null() || length > 64 {
+            return None;
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(ptr.cast(), length) };
+        Some(std::str::from_utf8(bytes).ok()?.to_owned())
+    }
+
+    fn shinri_key(&self, command: &CStr) -> Option<String> {
+        self.function(&[c"custombinds", c"getBoundKey"], |client| {
+            client.string(command);
+            client.call(1, 1)?;
+            client.read_key_name()
+        })
+    }
+
+    fn shinri_default(&self, command: &CStr) -> Option<i32> {
+        let name = (|| {
+            self.field(LUA_GLOBALS_INDEX, c"custombinds");
+            if self.stack_type() != 5 { return None; }
+            self.field(-1, c"commandIds");
+            if self.stack_type() != 5 { return None; }
+            self.field(-1, command);
+            if self.stack_type() != 3 { return None; }
+            let id = unsafe { (self.get_number)(self.state, -1) };
+            self.clear();
+            self.field(LUA_GLOBALS_INDEX, c"custombinds");
+            self.field(-1, c"commandDefaults");
+            if self.stack_type() != 5 { return None; }
+            unsafe {
+                (self.push_number)(self.state, id);
+                (self.raw_get)(self.state, -2);
             }
-            let mut length = 0;
-            let ptr = unsafe { (client.get_string)(client.state, -1, &mut length) };
-            if ptr.is_null() || !(1..=64).contains(&length) {
-                return None;
-            }
-            let bytes = unsafe { std::slice::from_raw_parts(ptr.cast(), length) };
-            Some(std::str::from_utf8(bytes).ok()?.to_owned())
+            self.read_key_name()
+        })();
+        self.clear();
+        let name = CString::new(name?).ok()?;
+        self.function(&[c"input", c"GetKeyCode"], |client| {
+            client.string(&name);
+            client.call(1, 1)?;
+            (client.stack_type() == 3).then(|| unsafe { (client.get_number)(client.state, -1) as i32 })
         })
     }
 }
@@ -336,11 +376,17 @@ impl Client {
 enum Gamemode {
     Panopticon,
     Shinri,
+    Other,
+}
+
+pub(super) fn has_custom_settings() -> Option<bool> {
+    Some(Client::open()?.gamemode()? != Gamemode::Other)
 }
 
 pub fn read() -> Option<Value> {
     let client = Client::open()?;
-    client.values(client.gamemode()?)
+    let mode = client.gamemode()?;
+    (mode != Gamemode::Other).then(|| client.values(mode)).flatten()
 }
 
 pub fn apply(patch: &Value) -> Option<Value> {
@@ -368,18 +414,19 @@ pub fn apply(patch: &Value) -> Option<Value> {
 
 pub(super) fn read_bindings() -> Option<Value> {
     let client = Client::open()?;
-    if client.gamemode()? != Gamemode::Panopticon {
-        return None;
-    }
+    let mode = client.gamemode()?;
     let mut bindings = Map::new();
     for &(command, action) in CUSTOM_BINDINGS {
-        if client.binding_code(c"GetDefault", action)?.is_none() {
-            continue;
-        }
-        let value = match client.binding_code(c"GetKey", action) {
-            Some(Some(code)) => client.button_name(code),
-            Some(None) => Some(String::new()),
-            None => None,
+        let value = match mode {
+            Gamemode::Panopticon if client.binding_code(c"GetDefault", action).flatten().is_some() => {
+                match client.binding_code(c"GetKey", action) {
+                    Some(Some(code)) => client.button_name(code),
+                    Some(None) => Some(String::new()),
+                    None => None,
+                }
+            }
+            Gamemode::Shinri => client.shinri_key(&CString::new(&command[1..]).ok()?),
+            _ => None,
         };
         if let Some(value) = value {
             bindings.insert(command.to_owned(), Value::String(value));
@@ -392,13 +439,26 @@ pub(super) fn read_bindings() -> Option<Value> {
 pub(super) fn apply_binding(command: &str, key: Option<i32>) -> Option<()> {
     let &(_, action) = CUSTOM_BINDINGS.iter().find(|(name, _)| *name == command)?;
     let client = Client::open()?;
-    if client.gamemode()? != Gamemode::Panopticon {
-        return None;
-    }
-    let default = client.binding_code(c"GetDefault", action)??;
+    let mode = client.gamemode()?;
+    let shinri_command = CString::new(&command[1..]).ok()?;
+    let default = match mode {
+        Gamemode::Panopticon => client.binding_code(c"GetDefault", action)??,
+        Gamemode::Shinri => client.shinri_default(&shinri_command)?,
+        Gamemode::Other => return None,
+    };
     let code = key.unwrap_or(default);
     if code != CLEARED_BINDING && !(1..=LAST_BUTTON_CODE).contains(&code) {
         return None;
+    }
+    if mode == Gamemode::Shinri {
+        client.function(&[c"custombinds", c"setBoundKey"], |client| {
+            client.string(&shinri_command);
+            unsafe { (client.push_number)(client.state, f64::from(code)) };
+            client.call(2, 0)
+        })?;
+        let actual = client.shinri_key(&shinri_command)?;
+        let expected = if code == CLEARED_BINDING { String::new() } else { client.button_name(code)? };
+        return actual.eq_ignore_ascii_case(&expected).then_some(());
     }
     client.function(&[c"DANGAN", c"Binds", c"SetKey"], |client| {
         client.string(action);

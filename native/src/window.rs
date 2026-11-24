@@ -1,6 +1,6 @@
 use serde_json::Value;
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     fs::{self, File},
     io::Read,
     os::windows::{ffi::OsStrExt, fs::MetadataExt},
@@ -18,7 +18,7 @@ use windows_sys::Win32::{
     },
     UI::WindowsAndMessaging::{
         DestroyIcon, EnumWindows, GetClassNameW, GetSystemMetrics, GetWindow, GetWindowTextW,
-        GetWindowThreadProcessId, IsWindowVisible, LoadImageW, SendMessageW, SetWindowTextW,
+        GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, LoadImageW, SendMessageW, SetWindowTextW,
         GW_OWNER, HICON, ICON_BIG, ICON_SMALL, IMAGE_ICON, LR_LOADFROMFILE, SM_CXICON, SM_CXSMICON,
         SM_CYICON, SM_CYSMICON, WM_GETICON, WM_SETICON,
     },
@@ -199,23 +199,36 @@ impl WindowIdentity {
 thread_local! {
     // Окно держит HICON до завершения игрового процесса.
     static IDENTITY: RefCell<Option<WindowIdentity>> = const { RefCell::new(None) };
+    static WINDOW: Cell<HWND> = const { Cell::new(ptr::null_mut()) };
+}
+
+fn game_window() -> Option<HWND> {
+    WINDOW.with(|cached| {
+        let window = cached.get();
+        if !window.is_null() && unsafe { IsWindow(window) } != 0 {
+            return Some(window);
+        }
+        let mut search = WindowSearch {
+            pid: unsafe { GetCurrentProcessId() },
+            window: ptr::null_mut(),
+        };
+        unsafe {
+            EnumWindows(Some(find_window), (&mut search as *mut WindowSearch) as LPARAM);
+        }
+        cached.set(search.window);
+        (!search.window.is_null()).then_some(search.window)
+    })
+}
+
+pub fn visible() -> Option<bool> {
+    let window = game_window()?;
+    Some(unsafe { IsWindowVisible(window) != 0 && IsIconic(window) == 0 })
 }
 
 pub fn apply() -> bool {
-    let mut search = WindowSearch {
-        pid: unsafe { GetCurrentProcessId() },
-        window: ptr::null_mut(),
-    };
-    unsafe {
-        EnumWindows(
-            Some(find_window),
-            (&mut search as *mut WindowSearch) as LPARAM,
-        )
-    };
-    let window = search.window;
-    if window.is_null() {
+    let Some(window) = game_window() else {
         return false;
-    }
+    };
 
     IDENTITY.with(|cache| {
         let Ok(mut cache) = cache.try_borrow_mut() else {

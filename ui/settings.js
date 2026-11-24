@@ -22,36 +22,29 @@
   var viewportSelector = '.modal.m-settings > .modal-body';
   var viewports = new WeakMap();
   var pendingRegionWrite;
+  var pendingLoadingWrite;
   var reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
   var dragProperties = ['app-region', '-webkit-app-region'];
   var oldDrag;
   var identitySettings = new WeakMap();
 
-  function configureIdentity(viewport) {
-    if (identitySettings.has(viewport)) return;
-    var section = document.createElement('section');
-    section.className = 'st-block';
-    var header = document.createElement('h3');
-    header.className = 'st-block__head';
-    header.textContent = 'Подключение';
-    var body = document.createElement('div');
-    body.className = 'st-block__body';
+  function connectionToggle(id, text, description) {
     var row = document.createElement('div');
     row.className = 'st-set-row';
     var labels = document.createElement('div');
     var name = document.createElement('div');
     name.className = 'st-set-name';
-    name.id = 'pt-shinri-identity-name';
-    name.textContent = 'Идентификатор Shinri Hub';
+    name.id = id + '-name';
+    name.textContent = text;
     var help = document.createElement('div');
     help.className = 'st-set-desc';
-    help.id = 'pt-shinri-identity-help';
-    help.textContent = 'Включает совместимость при выборе серверов Shinri Trial. Подключения Panopticon остаются обычными. Меняется до запуска игры.';
+    help.id = id + '-help';
+    help.textContent = description;
     labels.append(name, help);
     var toggle = document.createElement('label');
     toggle.className = 'st-toggle';
     var input = document.createElement('input');
-    input.id = 'pt-shinri-identity';
+    input.id = id;
     input.type = 'checkbox';
     input.disabled = true;
     input.setAttribute('role', 'switch');
@@ -63,7 +56,77 @@
     row.append(labels, toggle);
     var error = document.createElement('p');
     error.className = 'st-set-desc'; error.setAttribute('role', 'status'); error.hidden = true;
-    body.append(row, error); section.append(header, body); viewport.append(section);
+    return {row, input, name, help, error};
+  }
+
+  function configureLoadingScreen(body) {
+    var copy = {
+      ru: ['Пропускать экран загрузки', 'Пропускает вступительный экран с логотипом и предупреждением при следующем запуске Garry’s Mod.', 'Не удалось прочитать настройку экрана загрузки.', 'Не удалось сохранить настройку экрана загрузки.'],
+      en: ['Skip loading screen', 'Skips the intro with the logo and warning the next time Garry’s Mod starts.', 'Could not read the loading screen setting.', 'Could not save the loading screen setting.'],
+      fr: ['Passer l’écran de chargement', 'Passe l’introduction avec le logo et l’avertissement au prochain lancement de Garry’s Mod.', 'Impossible de lire le réglage de l’écran de chargement.', 'Impossible d’enregistrer le réglage de l’écran de chargement.'],
+    };
+    var {row, input, name, help, error} = connectionToggle('pt-skip-loading-screen', '', '');
+    body.append(row, error);
+    var saved = false;
+    var language;
+    var errorIndex;
+    function localize() {
+      var next = document.documentElement.lang.split('-')[0];
+      if (language === next) return;
+      language = next;
+      var [label, description] = copy[language] || copy.en;
+      name.textContent = label;
+      help.textContent = description;
+      if (errorIndex) showError(errorIndex);
+    }
+    function showError(index) {
+      errorIndex = index;
+      error.textContent = (copy[language] || copy.en)[index];
+      error.hidden = false;
+    }
+    localize();
+    (async function () {
+      try { await pendingLoadingWrite; } catch (_) { /* После ошибки читаем сохранённое значение. */ }
+      try {
+        saved = await window.electron.invoke('store', 'get', 'skipLoadingScreen') === true;
+        input.checked = saved;
+        input.disabled = false;
+      } catch (_) { showError(2); }
+    })();
+    input.addEventListener('change', async function () {
+      var desired = input.checked;
+      input.disabled = true;
+      errorIndex = null;
+      error.hidden = true;
+      var write = window.electron.invoke('store', 'set', 'skipLoadingScreen', desired);
+      pendingLoadingWrite = write;
+      try { await write; saved = desired; }
+      catch (_) { showError(3); }
+      finally {
+        if (pendingLoadingWrite === write) pendingLoadingWrite = null;
+        input.checked = saved;
+        input.disabled = false;
+      }
+    });
+    return localize;
+  }
+
+  function configureIdentity(viewport) {
+    var localize = identitySettings.get(viewport);
+    if (localize) { localize(); return; }
+    var section = document.createElement('section');
+    section.className = 'st-block';
+    var header = document.createElement('h3');
+    header.className = 'st-block__head';
+    header.textContent = 'Подключение';
+    var body = document.createElement('div');
+    body.className = 'st-block__body';
+    var {row, input, error} = connectionToggle('pt-shinri-identity', 'Идентификатор Shinri Hub',
+      'Включает совместимость при выборе серверов Shinri Trial. Подключения Panopticon остаются обычными. Меняется до запуска игры.');
+    body.append(row, error);
+    localize = configureLoadingScreen(body);
+    section.append(header, body);
+    viewport.append(section);
     var saved = false;
     var writing = false;
     var active = false;
@@ -93,7 +156,7 @@
       catch (_) { error.textContent = 'Измените идентификатор после выхода из игры. Если игра закрыта, проверьте доступ к настройкам.'; error.hidden = false; }
       finally { input.checked = saved; writing = false; refreshActive(); }
     });
-    identitySettings.set(viewport, {refresh: refreshActive});
+    identitySettings.set(viewport, localize);
   }
 
   function syncDrag(viewport) {
@@ -220,7 +283,9 @@
     var root = document.getElementById('root');
     if (!root) return;
     document.addEventListener('wheel', onWheel, {capture: true, passive: false});
-    new MutationObserver(refresh).observe(root, {childList: true, characterData: true, subtree: true});
+    var observer = new MutationObserver(refresh);
+    observer.observe(root, {childList: true, characterData: true, subtree: true});
+    observer.observe(document.documentElement, {attributes: true, attributeFilter: ['lang']});
     refresh();
   }
 

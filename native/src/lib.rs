@@ -6,6 +6,7 @@ use std::sync::OnceLock;
 
 mod client_settings;
 mod directory;
+mod engine_settings;
 mod loading_dialog;
 mod shared_settings;
 mod video;
@@ -327,6 +328,14 @@ unsafe extern "C" fn apply_window_identity(lua: Lua) -> c_int {
     1
 }
 
+unsafe extern "C" fn window_media_visible(lua: Lua) -> c_int {
+    let (Some(api), Some(visible)) = (LuaApi::get(), window::visible()) else {
+        return 0;
+    };
+    unsafe { (api.push_boolean)(lua, i32::from(visible)) };
+    1
+}
+
 unsafe extern "C" fn video_modes(lua: Lua) -> c_int {
     let Some(api) = LuaApi::get() else { return 0 };
     unsafe { api.json(lua, video::modes()) }
@@ -394,7 +403,9 @@ unsafe extern "C" fn apply_shared_settings(lua: Lua) -> c_int {
         return 1;
     }
     let raw = unsafe { std::slice::from_raw_parts(raw.cast(), length) };
-    if unsafe { api.game_flag(lua, c"IsInGame") } == Some(true) {
+    if unsafe { api.game_flag(lua, c"IsInGame") } == Some(true)
+        && client_settings::has_custom_settings() != Some(false)
+    {
         let applied = shared_settings::read().is_ok()
             && serde_json::from_slice(raw)
                 .ok()
@@ -417,30 +428,33 @@ unsafe extern "C" fn reset_shared_settings(lua: Lua) -> c_int {
     1
 }
 
-unsafe extern "C" fn read_engine_bindings(lua: Lua) -> c_int {
-    let Some(api) = LuaApi::get() else { return 0 };
-    let pending = shared_settings::config().ok()
-        .and_then(|config| hub_backend::bindings::pending(&config.parent()?.parent()?.join("cfg")).ok())
-        .and_then(|bindings| serde_json::to_value(bindings).ok());
-    unsafe { api.json(lua, pending) }
-}
-
-unsafe extern "C" fn queue_engine_bindings(lua: Lua) -> c_int {
+unsafe fn engine_settings_patch(lua: Lua, apply: fn(&[u8]) -> Option<()>) -> c_int {
     let Some(api) = LuaApi::get() else { return 0 };
     let result = (|| {
-        let config = shared_settings::config().ok()?;
+        shared_settings::config().ok()?;
         if unsafe { api.game_flag(lua, c"IsInLoading") } != Some(false) { return None; }
-        let cfg = config.parent()?.parent()?.join("cfg");
-        if unsafe { (api.lua_type)(lua, 1) } == 0 {
-            return hub_backend::bindings::reset(&cfg).ok();
-        }
         let mut length = 0;
         let raw = unsafe { (api.read_string)(lua, 1, &mut length) };
         if raw.is_null() || length > 4096 { return None; }
-        let raw = unsafe { std::slice::from_raw_parts(raw.cast(), length) };
-        hub_backend::bindings::queue(&cfg, raw).ok()
+        apply(unsafe { std::slice::from_raw_parts(raw.cast(), length) })
     })();
     unsafe { (api.push_boolean)(lua, i32::from(result.is_some())) };
+    1
+}
+
+unsafe extern "C" fn apply_engine_bindings(lua: Lua) -> c_int {
+    unsafe { engine_settings_patch(lua, engine_settings::apply_bindings) }
+}
+
+unsafe extern "C" fn apply_engine_settings(lua: Lua) -> c_int {
+    unsafe { engine_settings_patch(lua, engine_settings::apply_variables) }
+}
+
+unsafe extern "C" fn save_engine_config(lua: Lua) -> c_int {
+    let Some(api) = LuaApi::get() else { return 0 };
+    let applied = shared_settings::config().is_ok()
+        && engine_settings::save(unsafe { (api.read_boolean)(lua, 1) } != 0).is_some();
+    unsafe { (api.push_boolean)(lua, i32::from(applied)) };
     1
 }
 
@@ -606,6 +620,7 @@ pub unsafe extern "C" fn gmod13_open(lua: Lua) -> c_int {
         (c"VoiceGain", voice_gain),
         (c"VoiceSetGain", voice_set_gain),
         (c"ApplyWindowIdentity", apply_window_identity),
+        (c"WindowMediaVisible", window_media_visible),
         (c"VideoModes", video_modes),
         (c"ApplyVideoMode", apply_video_mode),
         (c"GetVoiceSettings", voice_settings),
@@ -619,8 +634,9 @@ pub unsafe extern "C" fn gmod13_open(lua: Lua) -> c_int {
         (c"SetLoadingIndicator", set_loading_indicator),
         (c"GetShinriIdentity", get_shinri_identity),
         (c"SetShinriIdentity", set_shinri_identity),
-        (c"ReadEngineBindings", read_engine_bindings),
-        (c"QueueEngineBindings", queue_engine_bindings),
+        (c"ApplyEngineBindings", apply_engine_bindings),
+        (c"ApplyEngineSettings", apply_engine_settings),
+        (c"SaveEngineConfig", save_engine_config),
         (c"ReadCustomBindings", read_custom_bindings),
         (c"SetCustomBinding", set_custom_binding),
         (c"PrepareConnection", prepare_connection),

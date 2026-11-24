@@ -7,6 +7,27 @@ pub struct Store {
     path: PathBuf,
     values: Map<String, Value>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loading_screen_opt_out_defaults_off_and_survives_reopening() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        fs::write(&path, br#"{"language":"ru"}"#).unwrap();
+        let mut store = Store::open(path.clone()).unwrap();
+        assert_eq!(store.get("skipLoadingScreen"), Some(&json!(false)));
+        store.set("skipLoadingScreen", json!(true)).unwrap();
+        assert!(store.set("skipLoadingScreen", json!("false")).is_err());
+        let mut store = Store::open(path.clone()).unwrap();
+        assert_eq!(store.get("skipLoadingScreen"), Some(&json!(true)));
+        store.set("skipLoadingScreen", json!(false)).unwrap();
+        let store = Store::open(path).unwrap();
+        assert_eq!(store.get("skipLoadingScreen"), Some(&json!(false)));
+    }
+}
 impl Store {
     pub fn open(path: PathBuf) -> Result<Self, String> {
         let mut values = if path.exists() {
@@ -49,6 +70,7 @@ impl Store {
             ("region", json!("cis")),
             ("returnToHub", json!(true)),
             ("minimizeOnJoin", json!(true)),
+            ("skipLoadingScreen", json!(false)),
             ("uiVolume", json!(0.3)),
             ("animatedBackground", json!(true)),
             ("workshopFilter", json!(true)),
@@ -139,7 +161,7 @@ fn validate(key: &str, value: &Value) -> Result<(), String> {
             .as_str()
             .is_some_and(|v| ["ru", "en", "fr"].contains(&v)),
         "region" => value.as_str().is_some_and(|v| ["cis", "eu"].contains(&v)),
-        "returnToHub" | "minimizeOnJoin" | "animatedBackground" | "workshopFilter" |
+        "returnToHub" | "minimizeOnJoin" | "skipLoadingScreen" | "animatedBackground" | "workshopFilter" |
         "workshopPanopticon" => value.is_boolean(),
         "workshopOnboarding" => matches!(value.as_str(), Some("pending" | "prepare" | "done")),
         "workshopInstallId" => value.as_str().is_some_and(|id| id.len() == 32 && id.bytes().all(|byte| byte.is_ascii_hexdigit())),

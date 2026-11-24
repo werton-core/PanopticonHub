@@ -2,7 +2,7 @@
   'use strict';
   if (window.electron) return;
   var nextId = 1, pending = new Map(), listeners = new Map();
-  var invokeChannels = new Set(['store','localeChanged','openDialog','createShortcut','openLogsFolder','openHostFolder','getAppVersion','getProtocol','handleProtocol','passedChecks','checkRequirements','findSteam','isSteamDirectory','findGmod','isGmodDirectory','getGmodPid','startGmod','cancelGmodLaunch','checkStApiHealth','stApiGet','isHubWindowVisible','workshopPreview','workshopSubscribe','designLoad','designSave','designPickAsset','designImport','designExport','designStyles','designSelectInitialStyle','updateCheck','updateInstall','updateGetMode','updateSetMode','updateCurrentVersion']);
+  var invokeChannels = new Set(['store','localeChanged','openDialog','createShortcut','openLogsFolder','openHostFolder','getAppVersion','getProtocol','handleProtocol','passedChecks','checkRequirements','findSteam','isSteamDirectory','findGmod','isGmodDirectory','getGmodPid','startGmod','cancelGmodLaunch','checkStApiHealth','stApiGet','isHubWindowVisible','workshopPreview','workshopSubscribe','designLoad','designSave','designDraft','designPickAsset','designImport','designExport','designStyles','designSelectInitialStyle','updateCheck','updateInstall','updateGetMode','updateSetMode','updateCurrentVersion']);
   var eventChannels = new Set(['notify','hostIntegrityFailed','gmodLaunchState','gmodUpdatePid','hubUpdate','hubWindowVisible','stApiBaseUrlChanged','animatedBackgroundChanged']);
   function transport(packet) {
     if (window.ipc && typeof window.ipc.postMessage === 'function') { window.ipc.postMessage(JSON.stringify(packet)); return; }

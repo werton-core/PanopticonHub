@@ -156,6 +156,7 @@
             track = new Audio('/design-media/' + asset);
             track.loop = true;
             track.preload = 'metadata';
+            track.addEventListener('canplay', updatePlayback);
         }
         syncControl();
         updatePlayback();
@@ -199,6 +200,7 @@
             if (!gotPid) receivePid(pid);
         }).catch(() => {});
         document.addEventListener('visibilitychange', updatePlayback);
+        window.addEventListener('focus', updatePlayback);
         window.addEventListener('pagehide', () => {
             pageHidden = true;
             updatePlayback();

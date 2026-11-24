@@ -426,6 +426,8 @@ fn with_store<T>(op: impl FnOnce(&Store, &mut Cache) -> Result<T, String>) -> Re
     let mut cache = CACHE
         .lock()
         .map_err(|_| "Хранилище оформления недоступно.")?;
+    // Игровой процесс должен открыть весь снимок до смены профиля и очистки медиа.
+    let _lock = store.lock().map_err(io_error)?;
     op(&store, &mut cache)
 }
 
@@ -433,8 +435,28 @@ pub fn load() -> Result<Profile, String> {
     with_store(|store, cache| store.load(cache))
 }
 
+#[derive(Default)]
+pub struct GameMedia(BTreeMap<String, File>);
+
+impl GameMedia {
+    pub fn take(&mut self, key: &str) -> Result<File, String> {
+        self.0.remove(key).ok_or_else(|| "Не найден файл оформления игры.".into())
+    }
+}
+
+pub fn load_for_game() -> Result<(Profile, GameMedia), String> {
+    with_store(Store::load_with_media)
+}
+
 pub fn save(profile: Profile) -> Result<Profile, String> {
     with_store(|store, cache| store.save(profile, cache))
+}
+
+pub fn update_draft(keys: Vec<String>) -> Result<(), String> {
+    if !keys.iter().all(|key| valid_media_key(key)) {
+        return Err("Некорректные файлы черновика оформления.".into());
+    }
+    with_store(|store, cache| store.update_draft(keys.into_iter().collect(), cache))
 }
 
 pub fn builtin_styles() -> serde_json::Value {
@@ -505,6 +527,29 @@ impl Store {
         Ok(Self { root, assets })
     }
 
+    fn lock(&self) -> io::Result<File> {
+        let path = self.root.join(".store-lock");
+        check_replace_target(&path)?;
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create(true);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            use windows_sys::Win32::Storage::FileSystem::{
+                FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE,
+            };
+            options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE);
+        }
+        let lock = options.open(path)?;
+        let meta = lock.metadata()?;
+        if !meta.is_file() || is_link(&meta) {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "Нужен обычный файл блокировки оформления."));
+        }
+        lock.lock()?;
+        Ok(lock)
+    }
+
     fn style_marker(&self, id: &str) -> Result<(PathBuf, bool), String> {
         if !valid_installation_id(id) {
             return Err("Некорректный идентификатор установки.".into());
@@ -528,14 +573,14 @@ impl Store {
         let mut completed = NamedTempFile::new_in(marker.parent().unwrap()).map_err(io_error)?;
         completed.write_all(b"1").map_err(io_error)?;
         active.apply_builtin_style(style);
-        let saved = self.save(active, cache)?;
+        let saved = self.write_profile(active, cache)?;
         persist(completed, &marker)?;
         Ok(saved)
     }
 
     fn active(&self) -> Result<Profile, String> {
         let path = self.root.join("profile.json");
-        let file = match open_regular(&path) {
+        let file = match open_regular(&path, false) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Profile::default()),
             Err(error) => return Err(io_error(error)),
@@ -553,21 +598,33 @@ impl Store {
     }
 
     fn load(&self, cache: &mut Cache) -> Result<Profile, String> {
+        self.load_with_media(cache).map(|(profile, _)| profile)
+    }
+
+    fn load_with_media(&self, cache: &mut Cache) -> Result<(Profile, GameMedia), String> {
         let mut profile = self.active()?;
         profile.refresh_legacy_panopticon();
-        profile
-            .assets
-            .retain(|_, key| self.verified(key, cache).is_ok());
+        let mut files = BTreeMap::new();
+        for key in profile.keys() {
+            if let Ok((_, file)) = self.verified(key, cache) {
+                files.insert(key.to_owned(), file);
+            }
+        }
+        profile.assets.retain(|_, key| files.contains_key(key));
         if !profile.assets.contains_key("gameLoadingMusic") {
             profile.game_loading_volume = None;
         }
-        profile
-            .decorations
-            .retain(|item| self.verified(&item.asset, cache).is_ok());
-        Ok(profile)
+        profile.decorations.retain(|item| files.contains_key(&item.asset));
+        Ok((profile, GameMedia(files)))
     }
 
     fn save(&self, profile: Profile, cache: &mut Cache) -> Result<Profile, String> {
+        let profile = self.write_profile(profile, cache)?;
+        let _ = self.update_draft(BTreeSet::new(), cache);
+        Ok(profile)
+    }
+
+    fn write_profile(&self, profile: Profile, cache: &mut Cache) -> Result<Profile, String> {
         let profile = profile.normalize()?;
         self.collect_media(&profile, cache)?;
         let path = self.root.join("profile.json");
@@ -576,6 +633,30 @@ impl Store {
         serde_json::to_writer_pretty(&mut output, &profile).map_err(|error| error.to_string())?;
         persist(output, &path)?;
         Ok(profile)
+    }
+
+    fn update_draft(&self, keys: BTreeSet<String>, cache: &mut Cache) -> Result<(), String> {
+        cache.staged = keys;
+        self.remove_unused(cache)
+    }
+
+    fn remove_unused(&self, cache: &mut Cache) -> Result<(), String> {
+        let active = self.active()?;
+        let live = active.keys();
+        for key in self.entries()?.keys() {
+            if !live.contains(key.as_str()) && !cache.staged.contains(key) {
+                self.remove_asset(key, cache);
+            }
+        }
+        Ok(())
+    }
+
+    fn remove_asset(&self, key: &str, cache: &mut Cache) -> bool {
+        if fs::remove_file(self.assets.join(key)).is_err() {
+            return false;
+        }
+        cache.verified.remove(key);
+        true
     }
 
     fn pick(&self, slot: &str, path: &Path, cache: &mut Cache) -> Result<String, String> {
@@ -591,7 +672,7 @@ impl Store {
         let kind = Kind::parse(&extension)
             .filter(|kind| slot.accepts(*kind))
             .ok_or("Формат файла не подходит для выбранного элемента оформления.")?;
-        let file = open_regular(path).map_err(io_error)?;
+        let file = open_regular(path, false).map_err(io_error)?;
         let size = file.metadata().map_err(io_error)?.len();
         let staged = Staged::read(file, kind, size, &self.assets)?;
         let key = staged.entry.key.clone();
@@ -600,7 +681,7 @@ impl Store {
     }
 
     fn import(&self, path: &Path, cache: &mut Cache) -> Result<Profile, String> {
-        let mut file = open_regular(path).map_err(io_error)?;
+        let mut file = open_regular(path, false).map_err(io_error)?;
         let file_length = file.metadata().map_err(io_error)?.len();
         let mut header = [0; PRESET_MAGIC.len() + 4];
         file.read_exact(&mut header).map_err(invalid_preset)?;
@@ -703,7 +784,7 @@ impl Store {
     fn verified(&self, key: &str, cache: &mut Cache) -> Result<(PathBuf, File), String> {
         let kind = key_kind(key).ok_or("Некорректный идентификатор файла оформления.")?;
         let path = self.assets.join(key);
-        let mut file = open_regular(&path).map_err(io_error)?;
+        let mut file = open_regular(&path, true).map_err(io_error)?;
         let meta = file.metadata().map_err(io_error)?;
         check_size(kind, meta.len())?;
         let stamp = Stamp::from_file(&meta);
@@ -791,7 +872,7 @@ impl Store {
         if count <= STORE_FILE_LIMIT && total <= STORE_LIMIT {
             return Ok(());
         }
-        let active = self.active().unwrap_or_default();
+        let active = self.active()?;
         let live = active.keys();
         let mut removable: Vec<_> = entries
             .iter()
@@ -803,8 +884,7 @@ impl Store {
             .collect();
         removable.sort_by_key(|(_, meta)| meta.modified().ok());
         for (key, meta) in removable {
-            if fs::remove_file(self.assets.join(key)).is_ok() {
-                cache.verified.remove(key);
+            if self.remove_asset(key, cache) {
                 total -= meta.len();
                 count -= 1;
             }
@@ -812,7 +892,7 @@ impl Store {
                 return Ok(());
             }
         }
-        Err("Хранилище оформления заполнено. Закройте и снова откройте Hub, чтобы освободить место от старых черновиков.".into())
+        Err("Хранилище оформления заполнено. Уменьшите размер медиа в теме или черновике.".into())
     }
 }
 
@@ -924,7 +1004,7 @@ fn check_replace_target(path: &Path) -> io::Result<()> {
     }
 }
 
-fn open_regular(path: &Path) -> io::Result<File> {
+fn open_regular(path: &Path, _allow_delete: bool) -> io::Result<File> {
     regular_metadata(path)?;
     let mut options = OpenOptions::new();
     options.read(true);
@@ -932,11 +1012,12 @@ fn open_regular(path: &Path) -> io::Result<File> {
     {
         use std::os::windows::fs::OpenOptionsExt;
         use windows_sys::Win32::Storage::FileSystem::{
-            FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ,
+            FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ,
         };
+        let sharing = if _allow_delete { FILE_SHARE_READ | FILE_SHARE_DELETE } else { FILE_SHARE_READ };
         options
             .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-            .share_mode(FILE_SHARE_READ);
+            .share_mode(sharing);
     }
     let file = options.open(path)?;
     let meta = file.metadata()?;
@@ -1777,6 +1858,120 @@ mod tests {
         assert_eq!(loaded.layout, profile.layout);
         assert!(loaded.assets.is_empty());
         assert!(loaded.decorations.is_empty());
+    }
+
+    #[test]
+    fn replacing_and_discarding_drafts_removes_only_unreferenced_media() {
+        let (_directory, store, mut cache) = isolated();
+        let active_key = store
+            .pick("hubLogo", &fixture("assets/panopticon-online.png"), &mut cache)
+            .unwrap();
+        let active = Profile {
+            assets: BTreeMap::from([("hubLogo".into(), active_key.clone())]),
+            ..Profile::default()
+        };
+        store.save(active.clone(), &mut cache).unwrap();
+        let first_key = store
+            .pick("gameLogo", &fixture("assets/shinri-online.png"), &mut cache)
+            .unwrap();
+        let second_key = store
+            .pick("hubIcon", &fixture("assets/hub-app.ico"), &mut cache)
+            .unwrap();
+        let first_preset = store.assets.join("first.pthubtheme");
+        let second_preset = store.root.join("second.pthubtheme");
+        let first = Profile {
+            decorations: vec![Decoration {
+                asset: first_key.clone(),
+                x: 10.0,
+                y: 20.0,
+                width: 15.0,
+            }],
+            ..Profile::default()
+        };
+        let second = Profile {
+            assets: BTreeMap::from([("hubIcon".into(), second_key.clone())]),
+            ..Profile::default()
+        };
+        store.export(first.clone(), &first_preset, &mut cache).unwrap();
+        store.export(second.clone(), &second_preset, &mut cache).unwrap();
+        store.update_draft(BTreeSet::new(), &mut cache).unwrap();
+        assert_eq!(store.entries().unwrap().len(), 1);
+
+        assert_eq!(store.import(&first_preset, &mut cache).unwrap(), first);
+        store.update_draft(BTreeSet::from([first_key.clone()]), &mut cache).unwrap();
+        assert_eq!(store.import(&second_preset, &mut cache).unwrap(), second);
+        let (_, mut previous_preview) = store.verified(&first_key, &mut cache).unwrap();
+        store.update_draft(BTreeSet::from([second_key.clone()]), &mut cache).unwrap();
+        assert_eq!(read_at::<8>(&mut previous_preview, 0).unwrap(), *b"\x89PNG\r\n\x1a\n");
+        drop(previous_preview);
+        assert!(!store.assets.join(first_key).exists());
+        assert!(store.verified(&second_key, &mut cache).is_ok());
+        assert_eq!(store.load(&mut cache).unwrap(), active);
+
+        store.update_draft(BTreeSet::new(), &mut cache).unwrap();
+        assert!(!store.assets.join(second_key).exists());
+        assert!(store.verified(&active_key, &mut cache).is_ok());
+        assert_eq!(store.import(&first_preset, &mut cache).unwrap(), first);
+    }
+
+    #[test]
+    fn game_snapshot_survives_cleanup_and_keeps_the_desktop_draft() {
+        let (directory, store, mut cache) = isolated();
+        let previous_key = store
+            .pick("gameLogo", &fixture("assets/shinri-online.png"), &mut cache)
+            .unwrap();
+        let previous = Profile {
+            assets: BTreeMap::from([("gameLogo".into(), previous_key.clone())]),
+            ..Profile::default()
+        };
+        store.save(previous.clone(), &mut cache).unwrap();
+        let replacement_key = store
+            .pick("gameLogo", &fixture("assets/panopticon-online.png"), &mut cache)
+            .unwrap();
+        let replacement = Profile {
+            assets: BTreeMap::from([("gameLogo".into(), replacement_key.clone())]),
+            ..Profile::default()
+        };
+        let mut invalid = replacement.clone();
+        invalid.assets.insert("hubLogo".into(), format!("{}.png", "a".repeat(64)));
+        assert!(store.save(invalid, &mut cache).is_err());
+        assert!(cache.staged.contains(&replacement_key));
+
+        let worker = Store::open(directory.path()).unwrap();
+        let mut worker_cache = Cache { verified: BTreeMap::new(), staged: BTreeSet::new() };
+        let (snapshot, mut media) = {
+            let _lock = worker.lock().unwrap();
+            worker.load_with_media(&mut worker_cache).unwrap()
+        };
+        assert_eq!(snapshot, previous);
+        assert!(store.assets.join(&replacement_key).exists());
+
+        let _lock = store.lock().unwrap();
+        store.save(replacement.clone(), &mut cache).unwrap();
+        assert!(cache.staged.is_empty());
+        let mut original = Vec::new();
+        media.take(&previous_key).unwrap().read_to_end(&mut original).unwrap();
+        assert_eq!(original, fs::read(fixture("assets/shinri-online.png")).unwrap());
+        assert!(!store.assets.join(&previous_key).exists());
+        assert_eq!(store.load(&mut cache).unwrap(), replacement);
+    }
+
+    #[test]
+    fn startup_cleanup_preserves_files_if_the_active_profile_cannot_be_read() {
+        let (_directory, store, mut cache) = isolated();
+        let leftover = store.assets.join(format!("{}.png", "a".repeat(64)));
+        let unrelated = store.assets.join("notes.txt");
+        fs::write(&leftover, b"old media").unwrap();
+        fs::write(&unrelated, b"user file").unwrap();
+        let profile = store.root.join("profile.json");
+        fs::write(&profile, br#"{"version":1,"assets": "#).unwrap();
+        assert!(store.update_draft(BTreeSet::new(), &mut cache).is_err());
+        assert!(leftover.is_file());
+
+        fs::write(&profile, br#"{"version":1}"#).unwrap();
+        store.update_draft(BTreeSet::new(), &mut cache).unwrap();
+        assert!(!leftover.exists());
+        assert!(unrelated.is_file());
     }
 
     #[test]

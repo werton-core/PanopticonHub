@@ -22,7 +22,7 @@
             layoutHint: 'Перетащите элементы в предпросмотре или задайте положение в процентах.',
             shown: 'Показать', play: 'Играть', settings: 'Настройки', social: 'Соцсети',
             onlinePanopticon: 'Онлайн Panopticon', onlineShinri: 'Онлайн Shinri', promo: 'Афиша',
-            minimize: 'Свернуть в трей', close: 'Закрыть', x: 'По горизонтали, %', y: 'По вертикали, %', width: 'Ширина, %',
+            minimize: 'Свернуть', close: 'Закрыть', x: 'По горизонтали, %', y: 'По вертикали, %', width: 'Ширина, %',
             add: 'Добавить файл…', remove: 'Удалить', noDecor: 'Добавьте картинку, GIF или видео поверх фона хаба.',
             decoration: 'Декор', import: 'Импорт…', export: 'Экспорт…', reset: 'Сбросить', cancel: 'Отмена', apply: 'Применить',
             imported: 'Профиль загружен. Нажмите «Применить», чтобы сохранить.', exported: 'Профиль экспортирован.',
@@ -54,7 +54,7 @@
             layoutHint: 'Drag items in the preview or set their position as percentages.',
             shown: 'Show', play: 'Play', settings: 'Settings', social: 'Social links',
             onlinePanopticon: 'Panopticon online', onlineShinri: 'Shinri online', promo: 'Events',
-            minimize: 'Minimize to tray', close: 'Close', x: 'Horizontal, %', y: 'Vertical, %', width: 'Width, %',
+            minimize: 'Minimize', close: 'Close', x: 'Horizontal, %', y: 'Vertical, %', width: 'Width, %',
             add: 'Add file…', remove: 'Remove', noDecor: 'Add an image, GIF or video over the Hub background.',
             decoration: 'Decoration', import: 'Import…', export: 'Export…', reset: 'Reset', cancel: 'Cancel', apply: 'Apply',
             imported: 'Profile loaded. Select Apply to save it.', exported: 'Profile exported.',
@@ -86,7 +86,7 @@
             layoutHint: 'Déplacez les éléments dans l’aperçu ou indiquez leur position en pourcentage.',
             shown: 'Afficher', play: 'Jouer', settings: 'Paramètres', social: 'Réseaux sociaux',
             onlinePanopticon: 'Panopticon en ligne', onlineShinri: 'Shinri en ligne', promo: 'Événements',
-            minimize: 'Réduire dans la zone de notification', close: 'Fermer', x: 'Horizontale, %', y: 'Verticale, %', width: 'Largeur, %',
+            minimize: 'Réduire', close: 'Fermer', x: 'Horizontale, %', y: 'Verticale, %', width: 'Largeur, %',
             add: 'Ajouter un fichier…', remove: 'Supprimer', noDecor: 'Ajoutez une image, un GIF ou une vidéo sur le fond du hub.',
             decoration: 'Décoration', import: 'Importer…', export: 'Exporter…', reset: 'Réinitialiser', cancel: 'Annuler', apply: 'Appliquer',
             imported: 'Profil chargé. Choisissez Appliquer pour l’enregistrer.', exported: 'Profil exporté.',
@@ -709,6 +709,7 @@
             startedOutside = false;
         });
         editor.addEventListener('close', () => {
+            if (editor.open) return;
             startedOutside = false;
             stopAudioPreview();
             hub?.classList.remove('pt-design-editing');
@@ -718,6 +719,7 @@
             ui.backdrop.replaceChildren();
             ui.surface.replaceChildren();
             ui.decorations.replaceChildren();
+            syncDraftMedia();
         });
         ui.header = el('header', 'modal-head pt-design-header');
         ui.heading = el('h1', 'modal-title');
@@ -848,6 +850,7 @@
             draft = {version: 1};
             notice('resetDraft');
             renderEditor();
+            syncDraftMedia();
             ui.footer.querySelector('.pt-design-reset')?.focus();
         }, 'pt-design-button pt-design-reset st-btn st-btn--secondary');
         const apply = button(text('apply'), saveProfile, 'pt-design-button pt-design-apply st-btn st-btn--gold');
@@ -1123,6 +1126,7 @@
                     delete draft.assets[slot];
                     notice(null);
                     renderEditor();
+                    syncDraftMedia();
                 });
                 restore.setAttribute('aria-label', text(label) + ' · ' + text('restore'));
                 actions.append(restore);
@@ -1242,6 +1246,7 @@
                 if (slot === 'gameLoadingMusic') delete draft.gameLoadingVolume;
                 notice(null);
                 renderInspector();
+                syncDraftMedia();
                 focusChoose();
             });
             identifyButton(restore, text(slot) + ' · ' + action);
@@ -1417,6 +1422,7 @@
                 selectedDecor = Math.max(0, Math.min(selectedDecor, items.length - 1));
                 notice(null);
                 renderEditor();
+                syncDraftMedia();
             }, 'pt-design-button pt-design-remove st-btn st-btn--secondary'));
         }
     }
@@ -1601,6 +1607,16 @@
         event.preventDefault();
     }
 
+    function draftMediaKeys() {
+        return [...new Set([...Object.values(draft?.assets || {}), ...(draft?.decorations || []).map((item) => item.asset)])];
+    }
+
+    function syncDraftMedia() {
+        window.electron.invoke('designDraft', draftMediaKeys()).catch((error) => {
+            console.error('Ошибка очистки файлов оформления:', error);
+        });
+    }
+
     async function operation(work, errorMessage) {
         if (busy || !loaded) return;
         stopAudioPreview();
@@ -1611,7 +1627,10 @@
         catch (error) { notice(errorMessage, true, error?.message); }
         finally {
             busy = false;
-            if (editor.open) renderEditor();
+            if (editor.open) {
+                renderEditor();
+                syncDraftMedia();
+            }
         }
     }
 
@@ -1635,8 +1654,7 @@
     }
 
     async function checkProfile() {
-        const keys = [...Object.values(draft.assets || {}), ...(draft.decorations || []).map((item) => item.asset)];
-        const invalid = await Promise.all([...new Set(keys)].map(async (key) => [key, await testMedia(key)]));
+        const invalid = await Promise.all(draftMediaKeys().map(async (key) => [key, await testMedia(key)]));
         const issue = invalid.find(([, valid]) => !valid)?.[0];
         if (!issue) return true;
         const slot = Object.keys(draft.assets || {}).find((id) => draft.assets[id] === issue);
@@ -1708,6 +1726,8 @@
             }
         }).catch(() => {});
         document.addEventListener('visibilitychange', visible);
+        window.addEventListener('focus', visible);
+        window.addEventListener('pageshow', visible);
         load();
         scheduleLive();
     }

@@ -68,6 +68,13 @@ impl EngineObject {
     }
 }
 
+pub(super) fn client_command(command: &CStr) -> Option<()> {
+    let engine = EngineObject::get("engine.dll", c"VEngineClient015")?;
+    let run: ClientCommand = unsafe { std::mem::transmute(engine.method(CLIENT_COMMAND)?) };
+    unsafe { run(engine.interface, command.as_ptr()) };
+    Some(())
+}
+
 fn sensible_size(width: c_int, height: c_int) -> bool {
     (640..=16384).contains(&width) && (480..=16384).contains(&height)
 }
@@ -138,15 +145,9 @@ pub fn apply(width: c_int, height: c_int, mode: &[u8]) -> Option<()> {
     if !available()?.contains(&(width, height)) && (active.0, active.1) != (width, height) {
         return None;
     }
-    let engine = EngineObject::get("engine.dll", c"VEngineClient015")?;
-    let run: ClientCommand = unsafe { std::mem::transmute(engine.method(CLIENT_COMMAND)?) };
     let command = CString::new(format!(
-        "mat_setvideomode {width} {height} {windowed} {borderless}"
+        "mat_setvideomode {width} {height} {windowed} {borderless}\nmat_savechanges\n"
     ))
     .ok()?;
-    unsafe {
-        run(engine.interface, command.as_ptr());
-        run(engine.interface, c"mat_savechanges".as_ptr());
-    }
-    Some(())
+    client_command(&command)
 }
