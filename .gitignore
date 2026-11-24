@@ -1,2 +1,5 @@
 /target/
 /dist/
+
+/tests/
+/tools/ui-bridge-test.mjs
