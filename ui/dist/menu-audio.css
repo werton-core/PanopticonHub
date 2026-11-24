@@ -11,6 +11,10 @@
 
 .pt-hub-menu-audio.is-muted .pt-hub-menu-audio__toggle { color: var(--st-m); }
 
+.hub.drag-window:has(.pt-hub-menu-audio:hover) {
+    -webkit-app-region: no-drag;
+}
+
 .pt-hub-menu-audio__popover {
     position: absolute;
     inset: 100% 0 auto;

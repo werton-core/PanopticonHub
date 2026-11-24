@@ -79,6 +79,14 @@
             renderControl();
             updatePlayback();
         });
+        panel.addEventListener('wheel', (event) => {
+            if (range.disabled || event.ctrlKey || !event.deltaY) return;
+            event.preventDefault();
+            const previous = range.value;
+            if (event.deltaY < 0) range.stepUp();
+            else range.stepDown();
+            if (range.value !== previous) range.dispatchEvent(new Event('input', {bubbles: true}));
+        }, {passive: false});
         percent = element('span', 'pt-hub-menu-audio__percent');
         percent.setAttribute('aria-hidden', 'true');
         slider.append(range);
