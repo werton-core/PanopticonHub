@@ -8,7 +8,7 @@ use std::{
     process::ExitStatus,
 };
 use windows_sys::Win32::{
-    Foundation::{BOOL, HWND, LPARAM, WAIT_OBJECT_0},
+    Foundation::{BOOL, HWND, LPARAM, WAIT_OBJECT_0, WAIT_TIMEOUT},
     System::Threading::{
         GetExitCodeProcess, OpenProcess, QueryFullProcessImageNameW, TerminateProcess,
         WaitForSingleObject, INFINITE, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
@@ -34,17 +34,28 @@ pub fn check_running_at(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Процесс игры, запущенный из каталога Steam, с открытым дескриптором.
+pub const CLOSED_FOR_UPDATE: u32 = 0x5048_0001;
+
 pub struct GameProcess {
-    pub pid: u32,
+    pid: u32,
     handle: OwnedHandle,
 }
 
 pub fn game_running(root: &Path) -> Result<bool, String> {
-    Ok(!processes_at(root, false)?.is_empty())
+    Ok(!processes_at(&[root], false, true)?.is_empty())
 }
 
-fn processes_at(root: &Path, terminate: bool) -> Result<Vec<GameProcess>, String> {
+pub fn update_processes(game_root: &Path, closing: bool) -> Result<Vec<GameProcess>, String> {
+    let shinri = game_root.parent().map(|common| common.join("Shinri Trial Host"));
+    let roots: Vec<&Path> = std::iter::once(game_root).chain(shinri.as_deref()).collect();
+    processes_at(&roots, closing, !closing)
+}
+
+fn processes_at(
+    roots: &[&Path],
+    closing: bool,
+    stop_at_first: bool,
+) -> Result<Vec<GameProcess>, String> {
     use std::ffi::c_void;
     use std::io::Error;
     type Handle = *mut c_void;
@@ -67,27 +78,20 @@ fn processes_at(root: &Path, terminate: bool) -> Result<Vec<GameProcess>, String
         fn Process32FirstW(handle: Handle, entry: *mut Entry) -> i32;
         fn Process32NextW(handle: Handle, entry: *mut Entry) -> i32;
     }
-    let expected = match fs::canonicalize(root) {
-        Ok(root) => normalize_windows_path(&root.to_string_lossy()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(format!("Не определён каталог игры: {error}")),
-    };
-    let scan_error = |error| format!("Не проверен список игровых процессов: {error}");
-    let mut found = Vec::new();
-    // Права завершения нужны только для закрытия игры по просьбе пользователя.
-    unsafe fn open(pid: u32, terminate: bool) -> Handle {
-        let access = if terminate {
-            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE | PROCESS_TERMINATE
-        } else {
-            PROCESS_QUERY_LIMITED_INFORMATION
-        };
-        let process = OpenProcess(access, 0, pid);
-        if process.is_null() && terminate {
-            OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid)
-        } else {
-            process
+    let mut paths = Vec::new();
+    let mut problem = None;
+    for root in roots {
+        match fs::canonicalize(root) {
+            Ok(path) => paths.push(normalize_windows_path(&path.to_string_lossy())),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => problem = Some(format!("Не определён каталог игры: {error}")),
         }
     }
+    if paths.is_empty() {
+        return problem.map_or_else(|| Ok(Vec::new()), Err);
+    }
+    let scan_error = |error| format!("Не проверен список игровых процессов: {error}");
+    let mut found = Vec::new();
     unsafe {
         let snapshot = CreateToolhelp32Snapshot(2, 0);
         if snapshot as isize == -1 {
@@ -106,25 +110,44 @@ fn processes_at(root: &Path, terminate: bool) -> Result<Vec<GameProcess>, String
                 name.as_str(),
                 "gmod.exe" | "gmod_win64.exe" | "hl2.exe" | "shinri-trial.exe"
             ) {
-                let process = open(entry.pid, terminate);
+                let access = PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE;
+                let mut process = OpenProcess(
+                    if closing { access | PROCESS_TERMINATE } else { access },
+                    0,
+                    entry.pid,
+                );
+                if process.is_null() && closing {
+                    process = OpenProcess(access, 0, entry.pid);
+                }
                 if process.is_null() {
                     let error = Error::last_os_error();
                     // Процесс из снимка может завершиться до открытия его PID.
                     if error.raw_os_error() != Some(87) {
-                        return Err(scan_error(error));
+                        problem = Some(scan_error(error));
                     }
                 } else {
-                    let process = OwnedHandle::from_raw_handle(process);
-                    let image = process_image(&process).map_err(scan_error)?;
-                    if belongs_to_game(&expected, &image) {
-                        found.push(GameProcess { pid: entry.pid, handle: process });
+                    let candidate = GameProcess {
+                        pid: entry.pid,
+                        handle: OwnedHandle::from_raw_handle(process),
+                    };
+                    match process_image(&candidate.handle) {
+                        Ok(image) if is_game_image(&paths, &image) => {
+                            if candidate.running()? {
+                                found.push(candidate);
+                                if stop_at_first {
+                                    return Ok(found);
+                                }
+                            }
+                        }
+                        Err(error) if candidate.running()? => problem = Some(scan_error(error)),
+                        _ => {}
                     }
                 }
             }
             if Process32NextW(snapshot.as_raw_handle(), &mut entry) == 0 {
                 let error = Error::last_os_error();
                 if error.raw_os_error() == Some(18) {
-                    return Ok(found);
+                    return problem.map_or_else(|| Ok(found), Err);
                 }
                 return Err(scan_error(error));
             }
@@ -132,42 +155,31 @@ fn processes_at(root: &Path, terminate: bool) -> Result<Vec<GameProcess>, String
     }
 }
 
-/// Влияет ли игра на обновление. Ошибка перечисления — не «игра запущена», а отдельное состояние.
-pub enum Activity {
-    Clear,
-    Running(Vec<GameProcess>),
-    Unverified(String),
-}
-
-pub fn activity(game_root: &Path) -> Activity {
-    let mut processes = Vec::new();
-    let mut problem = None;
-    let roots = std::iter::once(game_root.to_path_buf()).chain(
-        game_root.parent().map(|common| common.join("Shinri Trial Host")),
-    );
-    for root in roots {
-        match processes_at(&root, true) {
-            Ok(mut found) => processes.append(&mut found),
-            Err(error) => problem = Some(error),
+impl GameProcess {
+    fn running(&self) -> Result<bool, String> {
+        match unsafe { WaitForSingleObject(self.handle.as_raw_handle(), 0) } {
+            WAIT_OBJECT_0 => Ok(false),
+            WAIT_TIMEOUT => Ok(true),
+            _ => Err(format!(
+                "Не удалось проверить процесс {} — {}.",
+                self.pid, io::Error::last_os_error(),
+            )),
         }
     }
-    if !processes.is_empty() {
-        Activity::Running(processes)
-    } else if let Some(error) = problem {
-        Activity::Unverified(error)
-    } else {
-        Activity::Clear
-    }
 }
 
-/// Закрывает игру: без `force` просит окно закрыться и ждёт `timeout`, иначе завершает процессы.
-pub fn close(processes: Vec<GameProcess>, force: bool, timeout: std::time::Duration) -> Result<bool, String> {
+pub fn close(
+    mut processes: Vec<GameProcess>,
+    force: bool,
+    timeout: std::time::Duration,
+) -> Result<Vec<GameProcess>, String> {
     unsafe extern "system" fn ask(window: HWND, context: LPARAM) -> BOOL {
-        let pids = unsafe { &*(context as *const Vec<u32>) };
+        let processes = unsafe { &*(context as *const Vec<GameProcess>) };
         let mut pid = 0;
         if unsafe { GetWindowThreadProcessId(window, &mut pid) } != 0
-            && pids.contains(&pid)
             && unsafe { IsWindowVisible(window) } != 0
+            && unsafe { GetWindow(window, GW_OWNER) }.is_null()
+            && processes.iter().any(|process| process.pid == pid && process.running() == Ok(true))
         {
             unsafe { PostMessageW(window, WM_CLOSE, 0, 0) };
         }
@@ -175,28 +187,27 @@ pub fn close(processes: Vec<GameProcess>, force: bool, timeout: std::time::Durat
     }
     if force {
         for process in &processes {
-            if unsafe { TerminateProcess(process.handle.as_raw_handle(), 1) } == 0 {
-                // Процесс мог завершиться или быть недоступен раньше; это покажет ожидание ниже.
+            if process.running()?
+                && unsafe { TerminateProcess(process.handle.as_raw_handle(), CLOSED_FOR_UPDATE) } == 0
+            {
                 let error = std::io::Error::last_os_error();
-                if !matches!(error.raw_os_error(), Some(87) | Some(5)) {
+                if process.running()? {
                     return Err(format!("Не удалось завершить процесс {} — {error}.", process.pid));
                 }
             }
         }
     } else {
-        let pids: Vec<u32> = processes.iter().map(|process| process.pid).collect();
-        unsafe { EnumWindows(Some(ask), (&pids as *const Vec<u32>) as LPARAM) };
+        unsafe { EnumWindows(Some(ask), (&processes as *const Vec<GameProcess>) as LPARAM) };
     }
     let deadline = std::time::Instant::now() + timeout;
     loop {
-        let alive = |process: &GameProcess| unsafe {
-            WaitForSingleObject(process.handle.as_raw_handle(), 0) != WAIT_OBJECT_0
-        };
-        if !processes.iter().any(alive) {
-            return Ok(true);
+        for index in (0..processes.len()).rev() {
+            if !processes[index].running()? {
+                processes.swap_remove(index);
+            }
         }
-        if std::time::Instant::now() >= deadline {
-            return Ok(false);
+        if processes.is_empty() || std::time::Instant::now() >= deadline {
+            return Ok(processes);
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
@@ -285,4 +296,51 @@ fn belongs_to_game(root: &str, image: &str) -> bool {
     image
         .strip_prefix(root)
         .is_some_and(|path| path.starts_with('\\'))
+}
+
+fn is_game_image(roots: &[String], image: &str) -> bool {
+    let matches_root = |image: &str| roots.iter().any(|root| belongs_to_game(root, image));
+    // Windows can report the short path used to start the process.
+    matches_root(image)
+        || fs::canonicalize(image).is_ok_and(|path| matches_root(&path.to_string_lossy()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::windows::process::CommandExt;
+    use std::process::{Command, Stdio};
+    use std::time::Duration;
+
+    #[test]
+    fn close_timeout_keeps_only_verified_processes_for_force() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = Path::new(&std::env::var_os("SystemRoot").unwrap()).join("System32/ping.exe");
+        let root = temp.path().join("GarrysMod");
+        let other_root = temp.path().join("GarrysMod-other");
+        let start = |dir: &Path| {
+            fs::create_dir(dir).unwrap();
+            let exe = dir.join("gmod.exe");
+            fs::copy(&source, &exe).unwrap();
+            Command::new(exe)
+                .args(["-n", "10", "127.0.0.1"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .creation_flags(0x0800_0000)
+                .spawn()
+                .unwrap()
+        };
+        let mut game = start(&root);
+        let mut other = start(&other_root);
+        let processes = update_processes(&root, true).unwrap();
+        assert_eq!(processes.iter().map(|p| p.pid).collect::<Vec<_>>(), [game.id()]);
+        let remaining = close(processes, false, Duration::ZERO).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert!(close(remaining, true, Duration::from_secs(2)).unwrap().is_empty());
+        assert_eq!(game.wait().unwrap().code(), Some(CLOSED_FOR_UPDATE as i32));
+        assert!(update_processes(&root, false).unwrap().is_empty());
+        assert!(other.try_wait().unwrap().is_none());
+        other.kill().unwrap();
+        other.wait().unwrap();
+    }
 }

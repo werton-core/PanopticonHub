@@ -596,7 +596,7 @@ pub fn run(steam_root: &Path, game_root: &Path) -> Result<(), String> {
         played = true;
         let _ = writeln!(std::io::stdout().lock(), "PID {}", client.pid);
         let status = client.wait().map_err(|err| err.to_string())?;
-        if !status.success() {
+        if !status.success() && status.code() != Some(game_profile::CLOSED_FOR_UPDATE as i32) {
             return Err(format!("Garry’s Mod завершился с ошибкой ({status})"));
         }
         Ok(())

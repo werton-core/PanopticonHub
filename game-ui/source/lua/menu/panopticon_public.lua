@@ -26,12 +26,17 @@ local sharedDefaults = {
     dro_thirdperson_pos_updown = 0, dro_thirdperson_pos_rightleft = 20, dro_thirdperson_pos_forwardback = -85
 }
 local menuCookie = "panopticon_hub_menu_shared"
--- Допустимое значение настройки меню или nil: тип и диапазон проверяются и при чтении cookie.
+local function finite(value)
+    return isnumber(value) and value == value and math.abs(value) < 100000
+end
+
 local function menuValue(key, value)
-    if key == "musicVolume" then
-        return isnumber(value) and value == value and math.abs(value) < 100000 and math.Clamp(value, 0, 1) or nil
+    if key == "musicVolume" and finite(value) then
+        return math.Clamp(value, 0, 1)
     end
-    if type(menuDefaults[key]) == "boolean" then return isbool(value) and value or nil end
+    if type(menuDefaults[key]) == "boolean" and isbool(value) then
+        return value
+    end
 end
 local shared = table.Copy(menuDefaults)
 local engineMap = {
@@ -360,9 +365,6 @@ function hub.RequestVideoModes()
         call("STVideoModes", {}, {})
     end
 end
-local function finite(value)
-    return isnumber(value) and value == value and math.abs(value) < 100000
-end
 local videoCommands = {
     r_flashlightdepthtexture = true, r_waterforceexpensive = true, mat_hdr_level = true,
     mat_picmip = true, r_shadowrendertotexture = true, mat_vsync = true, mat_forceaniso = true,
@@ -430,6 +432,7 @@ function hub.ApplySharedSettings(raw)
     for key, value in pairs(values) do
         local default = sharedDefaults[key]
         local loadingSetting = loadingSettings[key]
+        local menuSetting = menuValue(key, value)
         if loadingSetting and isbool(value) then
             if key == "shinriIdentity" and (connection.Busy() or IsInGame() or IsInLoading()) then
                 hub.RequestSharedSettings()
@@ -437,8 +440,8 @@ function hub.ApplySharedSettings(raw)
                 saveLoadingSetting(loadingSetting, value, "сохранить")
                 loadingTouched = true
             end
-        elseif menuValue(key, value) ~= nil then
-            shared[key], menuChanged = menuValue(key, value), true
+        elseif menuSetting ~= nil then
+            shared[key], menuChanged = menuSetting, true
         elseif default ~= nil and type(value) == type(default) and (not isnumber(value) or finite(value)) then
             if key == "volume_dialogs" or key == "volume_dances" then value = math.Clamp(value, 0, 1) end
             changes[key] = value

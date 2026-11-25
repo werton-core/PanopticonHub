@@ -29,6 +29,9 @@
             closeBody: 'Чтобы установить обновление, нужно закрыть Garry’s Mod. Hub закроет игру сам. Несохранённый прогресс будет потерян.',
             closeCancel: 'Не сейчас',
             closeNow: 'Закрыть игру',
+            closing: 'Ожидаем завершения игры…',
+            gameLaunching: 'Дождитесь завершения запуска игры.',
+            gameUnverified: 'Не удалось проверить, закрыта ли игра. Закройте Garry’s Mod и повторите проверку.',
             forceTitle: 'Игра не закрылась',
             forceBody: 'Игра не завершилась за отведённое время. Завершить процессы Garry’s Mod принудительно?',
             forceNow: 'Завершить принудительно',
@@ -61,6 +64,9 @@
             closeBody: 'Garry’s Mod must be closed to install the update. Hub will close it for you. Unsaved progress will be lost.',
             closeCancel: 'Not now',
             closeNow: 'Close game',
+            closing: 'Waiting for the game to exit…',
+            gameLaunching: 'Wait for the game to finish launching.',
+            gameUnverified: 'Could not verify that the game is closed. Close Garry’s Mod and try again.',
             forceTitle: 'The game did not close',
             forceBody: 'The game has not exited in time. Terminate the Garry’s Mod processes anyway?',
             forceNow: 'Terminate',
@@ -93,6 +99,9 @@
             closeBody: 'Garry’s Mod doit être fermé pour installer la mise à jour. Hub le fermera pour vous. La progression non enregistrée sera perdue.',
             closeCancel: 'Pas maintenant',
             closeNow: 'Fermer le jeu',
+            closing: 'Attente de la fermeture du jeu…',
+            gameLaunching: 'Attendez la fin du lancement du jeu.',
+            gameUnverified: 'Impossible de vérifier que le jeu est fermé. Fermez Garry’s Mod et réessayez.',
             forceTitle: 'Le jeu ne s’est pas fermé',
             forceBody: 'Le jeu ne s’est pas terminé à temps. Forcer l’arrêt des processus Garry’s Mod ?',
             forceNow: 'Forcer l’arrêt',
@@ -105,9 +114,11 @@
 
     const modes = ['ask', 'auto', 'manual'];
     const otherModals = '.modal-dim.open, .st-dialog-dim, dialog[open]';
-    const errors = ['checkError', 'installError', 'unavailable', 'unmanaged', 'gameRunning', 'loadError', 'saveError'];
+    const errors = ['checkError', 'installError', 'unavailable', 'unmanaged', 'gameRunning', 'gameLaunching', 'gameUnverified', 'loadError', 'saveError'];
     const installErrors = new Map([
         ['UPDATE_GAME_RUNNING', 'gameRunning'],
+        ['UPDATE_GAME_LAUNCHING', 'gameLaunching'],
+        ['UPDATE_GAME_UNVERIFIED', 'gameUnverified'],
         ['UPDATE_UNMANAGED', 'unmanaged'],
         ['UPDATE_NOT_AVAILABLE', 'unavailable'],
     ]);
@@ -152,8 +163,7 @@
         const lang = document.documentElement.lang.toLowerCase().split('-')[0];
         const labels = copy[lang] || copy.en;
         const releaseTitle = release ? labels.available + ' · ' + release.version : '';
-        const gameBlocked = release && !busy() && (running || launching);
-        const statusKey = gameBlocked ? 'gameRunning' : phase === 'available' ? undefined : phase;
+        const statusKey = phase === 'available' ? (launching ? 'gameLaunching' : running ? 'gameRunning' : undefined) : phase;
         if (settings) {
             setText(settings.title, labels.title);
             setText(settings.label, labels.mode);
@@ -243,12 +253,12 @@
         } catch (error) {
             phase = installErrors.get(error?.code) || installErrors.get(error?.message) || 'installError';
             if (phase === 'unavailable') release = undefined;
-            if (automatic && phase === 'gameRunning') {
+            if (automatic && (phase === 'gameRunning' || phase === 'gameLaunching')) {
                 backgroundOffer = true;
                 // The native scan may see a game before WebView receives a process event.
                 if (!running && !launching && gameRevision === beforeInstall) retryAfterGameRevision = gameRevision;
             } else if (phase === 'gameRunning' && !automatic && !launching) {
-                showClosePrompt(false);
+                showClosePrompt();
             }
         }
         render();
@@ -337,9 +347,9 @@
         title.focus({preventScroll: true});
     }
 
-    // Два шага: вежливое закрытие, затем принудительное завершение процессов.
-    function showClosePrompt(force) {
+    function showClosePrompt() {
         if (document.querySelector('.pt-game-close-dialog')) return;
+        const labels = copy[document.documentElement.lang.toLowerCase().split('-')[0]] || copy.en;
         const dialog = element('dialog', 'modal pt-update-dialog pt-game-close-dialog no-drag-window');
         const head = element('header', 'modal-head');
         const title = element('h2', 'modal-title');
@@ -354,62 +364,56 @@
         body.append(text, status);
         const actions = element('footer', 'pt-update-actions');
         const cancel = button('a-btn ghost pt-update-button', () => dialog.close());
-                // Следующий шаг открывается только после удаления этого диалога из документа.
-        let afterClose = () => {};
+        let force = false, closing = false, closed = false;
         const confirm = button('a-btn pt-update-button', async () => {
-            confirm.disabled = true;
-            let result;
-            try { result = await native.invoke('closeGame', {force}); } catch (_) { result = null; }
-            if (result?.closed === true) {
-                running = false;
-                gameRevision++;
-                clearTimeout(gameSettleTimer);
-                gameSettleTimer = undefined;
-                if (phase === 'gameRunning') phase = 'available';
-                afterClose = () => { render(); void install(); };
-            } else {
-                afterClose = () => { if (!force) showClosePrompt(true); else showCloseFailure(); };
+            closing = confirm.disabled = cancel.disabled = true;
+            dialog.setAttribute('aria-busy', 'true');
+            showStatus(status, labels.closing);
+            try {
+                const result = await native.invoke('closeGame', {force});
+                if (result?.closed === true) {
+                    closed = true;
+                    dialog.close();
+                    return;
+                }
+                if (result?.closed !== false || force) throw new Error();
+                force = true;
+                setText(title, labels.forceTitle);
+                setText(text, labels.forceBody);
+                setText(confirm, labels.forceNow);
+                showStatus(status);
+                confirm.disabled = false;
+            } catch (error) {
+                const key = installErrors.get(error?.message);
+                showStatus(status, labels[key] || labels.closeError, key || 'installError');
+                confirm.hidden = true;
+            } finally {
+                dialog.removeAttribute('aria-busy');
+                closing = cancel.disabled = false;
+                if (!closed) title.focus({preventScroll: true});
             }
-            dialog.close();
         });
         actions.append(cancel, confirm);
         dialog.append(head, body, actions);
-        dialog.addEventListener('cancel', event => { event.preventDefault(); dialog.close(); });
+        dialog.addEventListener('cancel', event => {
+            event.preventDefault();
+            if (!closing) dialog.close();
+        });
         dialog.addEventListener('close', () => {
             dialog.remove();
-            afterClose();
+            if (!closed) return;
+            clearTimeout(gameSettleTimer);
+            gameSettleTimer = undefined;
+            phase = 'available';
+            void install();
         }, {once: true});
-        document.body.append(dialog);
-        dialog.showModal();
-        title.focus({preventScroll: true});
-        function copy2() { return (copy[document.documentElement.lang.toLowerCase().split('-')[0]] || copy.en); }
-        const labels = copy2();
-        setText(title, force ? labels.forceTitle : labels.closeTitle);
-        setText(text, force ? labels.forceBody : labels.closeBody);
+        setText(title, labels.closeTitle);
+        setText(text, labels.closeBody);
         cancel.textContent = labels.closeCancel;
-        confirm.textContent = force ? labels.forceNow : labels.closeNow;
-    }
-
-    function showCloseFailure() {
-        const labels = copy[document.documentElement.lang.toLowerCase().split('-')[0]] || copy.en;
-        const dialog = element('dialog', 'modal pt-update-dialog pt-game-close-dialog no-drag-window');
-        const head = element('header', 'modal-head');
-        const title = element('h2', 'modal-title');
-        title.tabIndex = -1;
-        title.textContent = labels.closeTitle;
-        head.append(title);
-        const body = element('div', 'modal-body');
-        const text = element('p', 'pt-update-status is-error');
-        text.textContent = labels.closeError;
-        body.append(text);
-        const actions = element('footer', 'pt-update-actions');
-        actions.append(button('a-btn ghost pt-update-button', () => dialog.close()));
-        dialog.append(head, body, actions);
-        dialog.addEventListener('close', () => dialog.remove(), {once: true});
+        confirm.textContent = labels.closeNow;
         document.body.append(dialog);
         dialog.showModal();
         title.focus({preventScroll: true});
-        actions.firstChild.textContent = labels.closeCancel;
     }
 
     function tryBackground() {
@@ -435,7 +439,7 @@
         // Launch progress and the game PID arrive as separate events.
         gameSettleTimer = setTimeout(() => {
             gameSettleTimer = undefined;
-            if (phase === 'gameRunning') phase = 'available';
+            if (phase === 'gameRunning' || phase === 'gameLaunching') phase = 'available';
             render();
             tryBackground();
         }, 120);

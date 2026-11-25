@@ -196,17 +196,15 @@
     if (!viewport.contains(document.activeElement)) viewport.focus({preventScroll: true});
 
     var end = 0;
+    var position = 0;
     var frame = 0;
+    var previous = 0;
     function reset() {
       if (frame) cancelAnimationFrame(frame);
       frame = 0;
     }
     viewport.addEventListener('pointerdown', reset);
     viewport.addEventListener('keydown', reset);
-    // Анимация не перезапускается на каждом обороте колеса: иначе скорость проваливается
-    // на каждом событии и прокрутка выглядит дёрганой.
-    var previous = 0;
-    var speed = 0;
     function step(now) {
       if (!viewport.isConnected) {
         frame = 0;
@@ -214,19 +212,16 @@
       }
       var tick = Math.max(0, Math.min(48, now - previous)) / 16.7;
       previous = now;
-      var position = viewport.scrollTop;
+      end = Math.min(end, Math.max(0, viewport.scrollHeight - viewport.clientHeight));
       var left = end - position;
-      if (Math.abs(left) < 1.5) {
+      if (reducedMotion.matches || Math.abs(left) < 0.5) {
         viewport.scrollTop = end;
         frame = 0;
-        speed = 0;
         return;
       }
-      // Скорость меняется плавно: без этого каждый щелчок колеса даёт рывок и торможение.
-      var wanted = Math.max(-1, Math.min(1, left / (viewport.clientHeight * 0.28))) * 0.5 * Math.abs(left);
-      speed += (wanted - speed) * (1 - Math.pow(0.62, tick));
-      var move = speed * tick;
-      viewport.scrollTop = Math.abs(move) >= Math.abs(left) ? end : position + move;
+      // scrollTop округляется браузером, поэтому дробная позиция хранится отдельно.
+      position += left * (1 - Math.pow(0.8, tick));
+      viewport.scrollTop = position;
       frame = requestAnimationFrame(step);
     }
     viewports.set(viewport, function (event) {
@@ -240,7 +235,7 @@
         // Смена направления отсчитывается от видимого положения, а запас цели ограничен,
         // чтобы прокрутка не улетала далеко после остановки колеса.
         var reach = viewport.clientHeight * 1.5;
-        if (delta * (end - from) < 0) end = from;
+        if (delta * (end - from) < 0) end = position = from;
         else end = from + Math.max(-reach, Math.min(reach, end - from));
       }
       end = Math.max(0, Math.min(limit, end + delta));
@@ -251,7 +246,7 @@
       }
       if (!frame) {
         previous = performance.now();
-        speed = 0;
+        position = from;
         frame = requestAnimationFrame(step);
       }
     });

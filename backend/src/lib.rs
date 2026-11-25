@@ -228,15 +228,23 @@ impl Backend {
         let steam = self
             .selected_steam()
             .ok_or("STEAM_NOT_FOUND: не найдена установка Steam")?;
-        let game = self
+        let game = self.game_path_in(&steam)?
+            .ok_or("Лицензированная Garry’s Mod app4000 не установлена в Steam")?;
+        Ok((steam, game))
+    }
+
+    pub fn installed_game_path(&self) -> Result<Option<PathBuf>, String> {
+        self.selected_steam().map_or(Ok(None), |steam| self.game_path_in(&steam))
+    }
+
+    fn game_path_in(&self, steam: &Path) -> Result<Option<PathBuf>, String> {
+        Ok(self
             .store
             .get("gmodPath")
             .and_then(Value::as_str)
             .map(PathBuf::from)
             .filter(|p| steam::is_game_directory(p))
-            .or(steam::find_game(&steam)?)
-            .ok_or("Лицензированная Garry’s Mod app4000 не установлена в Steam")?;
-        Ok((steam, game))
+            .or(steam::find_game(steam)?))
     }
 
     pub fn launch_request(&self) -> Result<LaunchRequest, String> {
