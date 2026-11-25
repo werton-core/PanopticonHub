@@ -110,6 +110,7 @@ enum Work {
     Pid(Option<u32>),
     Progress(Value),
     WorkshopPrepared,
+    GameClosedByUser(u64, Result<bool, String>, Arc<AtomicBool>),
     UpdateChecked(u64, Result<Option<updates::Update>, String>),
     UpdateDownloaded(u64, updates::Installation, Result<updates::VerifiedSetup, String>),
 }
@@ -307,12 +308,22 @@ fn prepare_branch(
     }
 }
 
-fn update_game_active(backend: &mut Backend, launching: bool) -> bool {
-    launching
-        || backend.invoke("getGmodPid", &json!([])).ok().flatten().is_some()
-        || backend.steam_paths().ok().is_some_and(|(_, game)| {
-            game_profile::check_running_at(&game).is_err()
-        })
+/// `Err` — обновлению мешает запущенная игра либо недоступная проверка процессов.
+fn update_game_active(backend: &mut Backend, launching: bool) -> Result<(), String> {
+    if launching {
+        return Err("Игра запускается.".into());
+    }
+    if backend.invoke("getGmodPid", &json!([])).ok().flatten().is_some() {
+        return Err("Garry’s Mod запущен.".into());
+    }
+    match backend.steam_paths() {
+        Err(_) => Ok(()),
+        Ok((_, game)) => match game_profile::activity(&game) {
+            game_profile::Activity::Clear => Ok(()),
+            game_profile::Activity::Running(_) => Err("Garry’s Mod запущен.".into()),
+            game_profile::Activity::Unverified(error) => Err(error),
+        },
+    }
 }
 
 fn actor(
@@ -320,6 +331,7 @@ fn actor(
     proxy: EventLoopProxy<Ui>,
     quit: Arc<AtomicBool>,
     tx: mpsc::Sender<Work>,
+    quiet_exit: Arc<AtomicBool>,
 ) -> Result<(), String> {
     let p = proxy.clone();
     let mut backend = Backend::new(
@@ -347,6 +359,8 @@ fn actor(
     let mut update_started = false;
     let mut checked_update: Option<updates::Update> = None;
     let mut checking_update = false;
+    // Одно обновление после закрытия игры пользователем проходит даже без проверки процессов.
+    let mut game_waived = false;
     for work in rx {
         let packet = match work {
             Work::DesignFile(id, dialog, path) => {
@@ -378,6 +392,18 @@ fn actor(
                 backend.invoke("store", &json!(["set", "workshopOnboarding", "done"]))?;
                 continue;
             }
+            Work::GameClosedByUser(id, result, quiet) => {
+                match result {
+                    Ok(true) => {
+                        backend.set_game_pid(None);
+                        game_waived = true;
+                    }
+                    _ => quiet.store(false, Ordering::Release),
+                }
+                let result = result.map(|closed| Some(json!({"closed": closed})));
+                send_ui(&proxy, Ui::Push(answer(id, result)));
+                continue;
+            }
             Work::UpdateChecked(id, result) => {
                 checking_update = false;
                 let result = result.map(|update| {
@@ -391,9 +417,10 @@ fn actor(
             Work::UpdateDownloaded(id, installation, result) => {
                 downloading_update = false;
                 let result = result.and_then(|setup| {
-                    if update_game_active(&mut backend, busy.is_some()) {
+                    if !game_waived && update_game_active(&mut backend, busy.is_some()).is_err() {
                         return Err("UPDATE_GAME_RUNNING".into());
                     }
+                    game_waived = false;
                     installation.start(setup)?;
                     update_started = true;
                     Ok(Some(json!(true)))
@@ -423,7 +450,7 @@ fn actor(
         }
         let result: Answer = match channel {
             "store" if args[0] == "set" && args[1] == hub_backend::identity::KEY
-                && update_game_active(&mut backend, busy.is_some()) =>
+                && update_game_active(&mut backend, busy.is_some()).is_err() =>
                 Err("Измените идентификатор после выхода из Garry’s Mod.".into()),
             "getAppVersion" => Ok(Some(json!(env!("CARGO_PKG_VERSION")))),
             "updateCurrentVersion" if args.as_array().is_some_and(Vec::is_empty) =>
@@ -452,9 +479,10 @@ fn actor(
             "updateInstall" if args.as_array().is_some_and(Vec::is_empty) => {
                 if downloading_update || update_started {
                     Err("UPDATE_BUSY".into())
-                } else if update_game_active(&mut backend, busy.is_some()) {
+                } else if !game_waived && update_game_active(&mut backend, busy.is_some()).is_err() {
                     Err("UPDATE_GAME_RUNNING".into())
                 } else {
+                    game_waived = false;
                     match (updates::Installation::from_receipt(&receipt), checked_update.clone()) {
                         (None, _) => Err("UPDATE_UNMANAGED".into()),
                         (_, None) => Err("UPDATE_NOT_AVAILABLE".into()),
@@ -540,6 +568,37 @@ fn actor(
                             continue;
                         }
                     }
+                }
+            }
+            // Закрывает игру по просьбе интерфейса: сначала корректно, затем принудительно.
+            "closeGame" if args.as_array().is_some_and(|args| args.len() == 1) => {
+                let force = args[0]["force"] == Value::Bool(true);
+                let quiet = quiet_exit.clone();
+                match backend.steam_paths() {
+                    Err(error) => Err(error),
+                    Ok((_, game)) => match game_profile::activity(&game) {
+                        game_profile::Activity::Clear => {
+                            backend.set_game_pid(None);
+                            game_waived = true;
+                            Ok(Some(json!({"closed": true})))
+                        }
+                        game_profile::Activity::Unverified(error) => Err(format!(
+                            "Не удалось найти игровые процессы, чтобы закрыть игру: {error}"
+                        )),
+                        game_profile::Activity::Running(processes) => {
+                            if force {
+                                // Принудительное завершение не должно показывать ошибку игры.
+                                quiet.store(true, Ordering::Release);
+                            }
+                            let reply = tx.clone();
+                            let timeout = Duration::from_secs(if force { 5 } else { 8 });
+                            thread::spawn(move || {
+                                let result = game_profile::close(processes, force, timeout);
+                                let _ = reply.send(Work::GameClosedByUser(id, result, quiet));
+                            });
+                            continue;
+                        }
+                    },
                 }
             }
             "startGmod" if update_started => Err("UPDATE_BUSY".into()),
@@ -847,10 +906,13 @@ fn run() -> Result<(), String> {
     let (tx, rx) = mpsc::channel();
     let quit = Arc::new(AtomicBool::new(false));
     let stop = quit.clone();
+    // Ошибка завершённой по просьбе игры не показывается.
+    let quiet_exit = Arc::new(AtomicBool::new(false));
+    let worker_quiet = quiet_exit.clone();
     let worker_proxy = proxy.clone();
     let worker_tx = tx.clone();
     thread::spawn(move || {
-        if let Err(err) = actor(rx, worker_proxy.clone(), stop, worker_tx) {
+        if let Err(err) = actor(rx, worker_proxy.clone(), stop, worker_tx, worker_quiet) {
             shell::error(&err);
             send_ui(&worker_proxy, Ui::Quit)
         }
@@ -906,7 +968,8 @@ fn run() -> Result<(), String> {
             Event::UserEvent(Ui::GameClosed(result))=>{
                 let _=tx.send(Work::Pid(None));
                 if active_game.take()==Some(true) {run_window(true,&win,&mut web,&proxy,&tx,&tray);}
-                if let Err(error)=result {shell::error(&error);}
+                let quiet=quiet_exit.swap(false,Ordering::Relaxed);
+                if let (Err(error),false)=(result,quiet) {shell::error(&error);}
             }
             Event::WindowEvent{event:WindowEvent::Focused(true),..} if web.is_none() && win.is_visible()=>{
                 run_window(true,&win,&mut web,&proxy,&tx,&tray);

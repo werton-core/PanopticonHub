@@ -203,28 +203,57 @@
     }
     viewport.addEventListener('pointerdown', reset);
     viewport.addEventListener('keydown', reset);
+    // Анимация не перезапускается на каждом обороте колеса: иначе скорость проваливается
+    // на каждом событии и прокрутка выглядит дёрганой.
+    var previous = 0;
+    var speed = 0;
+    function step(now) {
+      if (!viewport.isConnected) {
+        frame = 0;
+        return;
+      }
+      var tick = Math.max(0, Math.min(48, now - previous)) / 16.7;
+      previous = now;
+      var position = viewport.scrollTop;
+      var left = end - position;
+      if (Math.abs(left) < 1.5) {
+        viewport.scrollTop = end;
+        frame = 0;
+        speed = 0;
+        return;
+      }
+      // Скорость меняется плавно: без этого каждый щелчок колеса даёт рывок и торможение.
+      var wanted = Math.max(-1, Math.min(1, left / (viewport.clientHeight * 0.28))) * 0.5 * Math.abs(left);
+      speed += (wanted - speed) * (1 - Math.pow(0.62, tick));
+      var move = speed * tick;
+      viewport.scrollTop = Math.abs(move) >= Math.abs(left) ? end : position + move;
+      frame = requestAnimationFrame(step);
+    }
     viewports.set(viewport, function (event) {
       var limit = viewport.scrollHeight - viewport.clientHeight;
       if (event.ctrlKey || event.shiftKey || !event.deltaY || limit <= 0) return;
       event.preventDefault();
+      var delta = getDelta(event, viewport);
       var from = viewport.scrollTop;
-      end = Math.max(0, Math.min(limit, (frame ? end : from) + getDelta(event, viewport)));
-      reset();
+      if (!frame) end = from;
+      else {
+        // Смена направления отсчитывается от видимого положения, а запас цели ограничен,
+        // чтобы прокрутка не улетала далеко после остановки колеса.
+        var reach = viewport.clientHeight * 1.5;
+        if (delta * (end - from) < 0) end = from;
+        else end = from + Math.max(-reach, Math.min(reach, end - from));
+      }
+      end = Math.max(0, Math.min(limit, end + delta));
       if (reducedMotion.matches || end === from) {
+        reset();
         viewport.scrollTop = end;
         return;
       }
-      var start = performance.now();
-      function step(now) {
-        if (!viewport.isConnected) {
-          frame = 0;
-          return;
-        }
-        var time = Math.max(0, Math.min(1, (now - start) / 180));
-        viewport.scrollTop = from + (end - from) * (1 - Math.pow(1 - time, 3));
-        frame = time < 1 ? requestAnimationFrame(step) : 0;
+      if (!frame) {
+        previous = performance.now();
+        speed = 0;
+        frame = requestAnimationFrame(step);
       }
-      frame = requestAnimationFrame(step);
     });
   }
 

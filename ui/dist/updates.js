@@ -25,6 +25,14 @@
             unavailable: 'Это обновление больше недоступно. Проверьте обновления ещё раз.',
             later: 'Позже',
             dontAsk: 'Больше не спрашивать',
+            closeTitle: 'Закрыть игру?',
+            closeBody: 'Чтобы установить обновление, нужно закрыть Garry’s Mod. Hub закроет игру сам. Несохранённый прогресс будет потерян.',
+            closeCancel: 'Не сейчас',
+            closeNow: 'Закрыть игру',
+            forceTitle: 'Игра не закрылась',
+            forceBody: 'Игра не завершилась за отведённое время. Завершить процессы Garry’s Mod принудительно?',
+            forceNow: 'Завершить принудительно',
+            closeError: 'Не удалось закрыть игру. Закройте Garry’s Mod вручную и повторите попытку.',
         },
         en: {
             title: 'Updates',
@@ -49,6 +57,14 @@
             unavailable: 'This update is no longer available. Check for updates again.',
             later: 'Later',
             dontAsk: 'Don’t ask again',
+            closeTitle: 'Close the game?',
+            closeBody: 'Garry’s Mod must be closed to install the update. Hub will close it for you. Unsaved progress will be lost.',
+            closeCancel: 'Not now',
+            closeNow: 'Close game',
+            forceTitle: 'The game did not close',
+            forceBody: 'The game has not exited in time. Terminate the Garry’s Mod processes anyway?',
+            forceNow: 'Terminate',
+            closeError: 'Could not close the game. Close Garry’s Mod manually and try again.',
         },
         fr: {
             title: 'Mises à jour',
@@ -73,6 +89,14 @@
             unavailable: 'Cette mise à jour n’est plus disponible. Relancez la recherche.',
             later: 'Plus tard',
             dontAsk: 'Ne plus demander',
+            closeTitle: 'Fermer le jeu ?',
+            closeBody: 'Garry’s Mod doit être fermé pour installer la mise à jour. Hub le fermera pour vous. La progression non enregistrée sera perdue.',
+            closeCancel: 'Pas maintenant',
+            closeNow: 'Fermer le jeu',
+            forceTitle: 'Le jeu ne s’est pas fermé',
+            forceBody: 'Le jeu ne s’est pas terminé à temps. Forcer l’arrêt des processus Garry’s Mod ?',
+            forceNow: 'Forcer l’arrêt',
+            closeError: 'Impossible de fermer le jeu. Fermez Garry’s Mod manuellement et réessayez.',
         },
     };
 
@@ -114,7 +138,8 @@
     }
 
     function canInstall() {
-        return release && !busy() && !savingMode && running === false && !launching
+        // Запущенную игру можно закрыть из предложения после нажатия.
+        return release && !busy() && !savingMode && !launching
             && gameSettleTimer === undefined && phase !== 'unmanaged';
     }
 
@@ -222,6 +247,8 @@
                 backgroundOffer = true;
                 // The native scan may see a game before WebView receives a process event.
                 if (!running && !launching && gameRevision === beforeInstall) retryAfterGameRevision = gameRevision;
+            } else if (phase === 'gameRunning' && !automatic && !launching) {
+                showClosePrompt(false);
             }
         }
         render();
@@ -233,10 +260,10 @@
         const title = element('h3', 'st-block__head');
         const body = element('div', 'st-block__body');
         const row = element('div', 'st-set-row');
-        const label = element('label', 'st-set-name');
+        // Обычный текст, а не <label for>: клик по подписи не должен открывать список.
+        const label = element('span', 'st-set-name');
         const mount = element('div', 'pt-update-mode-mount');
         label.id = 'pt-update-mode-label';
-        label.htmlFor = 'pt-update-mode';
         const modeControl = window.PTHubMountDropdown(mount, {
             id: 'pt-update-mode', labelledBy: label.id, className: 'pt-update-mode',
             fixed: true, onChange: value => { void saveMode(value); },
@@ -308,6 +335,81 @@
         document.body.append(dialog);
         dialog.showModal();
         title.focus({preventScroll: true});
+    }
+
+    // Два шага: вежливое закрытие, затем принудительное завершение процессов.
+    function showClosePrompt(force) {
+        if (document.querySelector('.pt-game-close-dialog')) return;
+        const dialog = element('dialog', 'modal pt-update-dialog pt-game-close-dialog no-drag-window');
+        const head = element('header', 'modal-head');
+        const title = element('h2', 'modal-title');
+        title.tabIndex = -1;
+        dialog.setAttribute('aria-labelledby', 'pt-game-close-title');
+        title.id = 'pt-game-close-title';
+        head.append(title);
+        const body = element('div', 'modal-body');
+        const text = element('p', 'pt-update-notes');
+        const status = element('p', 'pt-update-status');
+        status.setAttribute('role', 'status');
+        body.append(text, status);
+        const actions = element('footer', 'pt-update-actions');
+        const cancel = button('a-btn ghost pt-update-button', () => dialog.close());
+                // Следующий шаг открывается только после удаления этого диалога из документа.
+        let afterClose = () => {};
+        const confirm = button('a-btn pt-update-button', async () => {
+            confirm.disabled = true;
+            let result;
+            try { result = await native.invoke('closeGame', {force}); } catch (_) { result = null; }
+            if (result?.closed === true) {
+                running = false;
+                gameRevision++;
+                clearTimeout(gameSettleTimer);
+                gameSettleTimer = undefined;
+                if (phase === 'gameRunning') phase = 'available';
+                afterClose = () => { render(); void install(); };
+            } else {
+                afterClose = () => { if (!force) showClosePrompt(true); else showCloseFailure(); };
+            }
+            dialog.close();
+        });
+        actions.append(cancel, confirm);
+        dialog.append(head, body, actions);
+        dialog.addEventListener('cancel', event => { event.preventDefault(); dialog.close(); });
+        dialog.addEventListener('close', () => {
+            dialog.remove();
+            afterClose();
+        }, {once: true});
+        document.body.append(dialog);
+        dialog.showModal();
+        title.focus({preventScroll: true});
+        function copy2() { return (copy[document.documentElement.lang.toLowerCase().split('-')[0]] || copy.en); }
+        const labels = copy2();
+        setText(title, force ? labels.forceTitle : labels.closeTitle);
+        setText(text, force ? labels.forceBody : labels.closeBody);
+        cancel.textContent = labels.closeCancel;
+        confirm.textContent = force ? labels.forceNow : labels.closeNow;
+    }
+
+    function showCloseFailure() {
+        const labels = copy[document.documentElement.lang.toLowerCase().split('-')[0]] || copy.en;
+        const dialog = element('dialog', 'modal pt-update-dialog pt-game-close-dialog no-drag-window');
+        const head = element('header', 'modal-head');
+        const title = element('h2', 'modal-title');
+        title.tabIndex = -1;
+        title.textContent = labels.closeTitle;
+        head.append(title);
+        const body = element('div', 'modal-body');
+        const text = element('p', 'pt-update-status is-error');
+        text.textContent = labels.closeError;
+        body.append(text);
+        const actions = element('footer', 'pt-update-actions');
+        actions.append(button('a-btn ghost pt-update-button', () => dialog.close()));
+        dialog.append(head, body, actions);
+        dialog.addEventListener('close', () => dialog.remove(), {once: true});
+        document.body.append(dialog);
+        dialog.showModal();
+        title.focus({preventScroll: true});
+        actions.firstChild.textContent = labels.closeCancel;
     }
 
     function tryBackground() {

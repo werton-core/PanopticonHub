@@ -26,6 +26,13 @@ local sharedDefaults = {
     dro_thirdperson_pos_updown = 0, dro_thirdperson_pos_rightleft = 20, dro_thirdperson_pos_forwardback = -85
 }
 local menuCookie = "panopticon_hub_menu_shared"
+-- Допустимое значение настройки меню или nil: тип и диапазон проверяются и при чтении cookie.
+local function menuValue(key, value)
+    if key == "musicVolume" then
+        return isnumber(value) and value == value and math.abs(value) < 100000 and math.Clamp(value, 0, 1) or nil
+    end
+    if type(menuDefaults[key]) == "boolean" then return isbool(value) and value or nil end
+end
 local shared = table.Copy(menuDefaults)
 local engineMap = {
     mouseSensitivity = "sensitivity", volumeMaster = "volume", shadowDepth = "r_flashlightdepthtexture", waterExpensive = "r_waterforceexpensive",
@@ -430,10 +437,8 @@ function hub.ApplySharedSettings(raw)
                 saveLoadingSetting(loadingSetting, value, "сохранить")
                 loadingTouched = true
             end
-        elseif key == "musicVolume" and finite(value) then
-            shared[key], menuChanged = math.Clamp(value, 0, 1), true
-        elseif type(menuDefaults[key]) == "boolean" and isbool(value) then
-            shared[key], menuChanged = value, true
+        elseif menuValue(key, value) ~= nil then
+            shared[key], menuChanged = menuValue(key, value), true
         elseif default ~= nil and type(value) == type(default) and (not isnumber(value) or finite(value)) then
             if key == "volume_dialogs" or key == "volume_dances" then value = math.Clamp(value, 0, 1) end
             changes[key] = value
@@ -851,7 +856,17 @@ end
 function STSetLoadingTranslations() end
 function STSetDiscordTranslations() end
 local stored = util.JSONToTable(cookie.GetString(menuCookie, ""))
-if istable(stored) then for key in pairs(shared) do if type(stored[key]) == type(shared[key]) then shared[key] = stored[key] end end end
+if istable(stored) then
+    local repaired = false
+    for key in pairs(shared) do
+        local value = menuValue(key, stored[key])
+        if value ~= nil then
+            repaired = repaired or value ~= stored[key]
+            shared[key] = value
+        end
+    end
+    if repaired then cookie.Set(menuCookie, util.TableToJSON(shared)) end
+end
 local lastInGame, lastLoading, lastReconnect
 timer.Create("PanopticonHub.Loading", 0.15, 0, function()
     publishWindowMediaVisibility(false)
